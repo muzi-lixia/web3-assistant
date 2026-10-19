@@ -2,7 +2,9 @@
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
 from decimal import Decimal
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain_ollama import ChatOllama
@@ -34,6 +36,12 @@ _RENDERERS = {
 }
 
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
+_ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
+_PERCENT = re.compile(r"\d+(?:\.\d+)?\s*%")
+_SENTENCE_END = re.compile(r"[。！？；!?;\n]")
+_TOLERANCE = Decimal("0.01")
+# 小于这个值的整数按条数、序号处理，不参与核对
+_COUNT_LIMIT = Decimal(100)
 
 
 def _model() -> ChatOllama:
@@ -41,7 +49,10 @@ def _model() -> ChatOllama:
         model=settings.intent_model,
         base_url=settings.ollama_url,
         temperature=0,
-        async_client_kwargs={"trust_env": False},
+        async_client_kwargs={
+            "trust_env": False,
+            "timeout": settings.model_timeout_seconds,
+        },
     )
 
 
@@ -52,31 +63,50 @@ def _render(result: CapabilityResult) -> str:
     return renderer(result)
 
 
-def _last_text(state: dict) -> str:
-    """取模型最后一条消息的文本。"""
-    messages = state.get("messages") or []
-    if not messages:
-        return ""
-    content = messages[-1].content
+def _text_of(message: Any) -> str:
+    """从流式消息块里取正文。工具调用块没有正文，取出来是空串。"""
+    content = message.content
     if isinstance(content, str):
-        return content.strip()
-    return "".join(
-        part.get("text", "") for part in content if isinstance(part, dict)
-    ).strip()
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    return ""
 
 
-def _grounded(answer: str, facts: str) -> bool:
-    """回答里的每个数字都必须能在工具结果里找到，容差 1%。"""
+def _head(buffer: str) -> int:
+    """返回第一个句末标点之后的位置，没有句末返回 0。"""
+    match = _SENTENCE_END.search(buffer)
+    return match.end() if match else 0
+
+
+def _offender(answer: str, facts: str) -> str | None:
+    """返回第一个对不上的数字，全部对得上返回 None。
+
+    地址和百分比不参与核对：地址里全是数字，百分比是模型自己做的一次换算。
+    带小数的数值按 1% 容差比对；整数要求能由工具结果的数值取整得到，
+    小于 100 的整数当作条数、序号放过。
+    """
+
     allowed = [Decimal(item) for item in _NUMBER.findall(facts)]
-    for raw in _NUMBER.findall(answer):
+    rounded = {round(item) for item in allowed}
+    text = _PERCENT.sub(" ", _ADDRESS.sub(" ", answer))
+
+    for raw in _NUMBER.findall(text):
         value = Decimal(raw)
-        if not any(
+        if "." not in raw:
+            if value < _COUNT_LIMIT or value in rounded:
+                continue
+            return raw
+        if any(
             item == value
-            or (item != 0 and abs(item - value) / item < Decimal("0.01"))
+            or (item != 0 and abs(item - value) / item < _TOLERANCE)
             for item in allowed
         ):
-            return False
-    return True
+            continue
+        return raw
+    return None
 
 
 async def resolve(ctx: SessionContext, text: str, conversation_id: str) -> Intent:
@@ -104,13 +134,19 @@ async def resolve(ctx: SessionContext, text: str, conversation_id: str) -> Inten
     return intent
 
 
-async def run(
+async def run_stream(
     ctx: SessionContext,
     text: str,
     intent: Intent,
-    conversation_id: str
-) -> tuple[str, CapabilityResult]:
-    """意图已定，交给 Agent 调工具；答案由模型组织，数字经校验。"""
+    conversation_id: str,
+) -> AsyncIterator[tuple[str, Any]]:
+    """意图已定，交给 Agent 调工具；答案边生成边下发，数字逐句校验。
+
+    依次产出：
+      delta  一段已通过数字校验的答案文本
+      answer 答案全文，模型未能给出合规答案时为空串
+      calls  本轮全部工具调用结果
+    """
 
     turn = TurnContext(ctx=ctx)
     agent = create_agent(
@@ -118,13 +154,72 @@ async def run(
         tools,
         system_prompt=prompt(AGENT_PROMPT).render(capability=intent.capability),
     )
-    state = await agent.ainvoke(
+
+    facts = ""
+    rendered = 0
+    buffer = ""
+    parts: list[str] = []
+    blocked = False
+    calls_seen: set[str] = set()
+    pending: list[dict] = []
+
+    async for mode, chunk in agent.astream(
         {"messages": [("user", text)]},
         config={"configurable": {"turn": turn}, "recursion_limit": 8},
-    )
+        stream_mode=["messages", "values"],
+    ):
+        if mode == "values":
+            # 每条 values 都带完整历史，按 tool_call id 去重
+            for message in chunk.get("messages") or []:
+                for call in getattr(message, "tool_calls", None) or []:
+                    if call["id"] in calls_seen:
+                        continue
+                    calls_seen.add(call["id"])
+                    pending.append(
+                        {"name": call["name"], "arguments": call.get("args") or {}}
+                    )
+            continue
+        message, meta = chunk
+        if meta.get("langgraph_node") != "model":
+            continue
+        # 工具还没执行完时，模型说的话是在选工具，不是答案
+        if not turn.results:
+            continue
+        if len(turn.results) > rendered:
+            facts = "\n".join(_render(item) for item in turn.results)
+            rendered = len(turn.results)
 
-    called_tool = bool(turn.results)
-    if not called_tool:
+        buffer += _text_of(message)
+        while (cut := _head(buffer)):
+            segment, buffer = buffer[:cut], buffer[cut:]
+            number = _offender(segment, facts)
+            if number is not None:
+                blocked = True
+                logger.warning(
+                    "答案片段未通过数字校验 number=%r 本轮不再下发答案 segment=%r",
+                    number,
+                    segment,
+                )
+                break
+            parts.append(segment)
+            yield ("delta", {"text": segment})
+        if blocked:
+            break
+
+    if not blocked and buffer:
+        number = _offender(buffer, facts)
+        if number is None:
+            parts.append(buffer)
+            yield ("delta", {"text": buffer})
+        else:
+            blocked = True
+            logger.warning(
+                "答案尾段未通过数字校验 number=%r 本轮不再下发答案 tail=%r",
+                number,
+                buffer,
+            )
+
+    if not turn.results:
         # 模型没调工具时按已判定的意图兜底，不让一次模型失手变成产品故障
         tool_ = _TOOLS.get(intent.capability)
         if tool_ is None:
@@ -140,11 +235,18 @@ async def run(
             intent.capability,
         )
 
-    facts = _render(result)
-    answer_text = _last_text(state) if called_tool else ""
-    if not answer_text or not _grounded(answer_text, facts):
-        logger.warning("模型答案未通过数字校验，退回模板 capability=%s", result.capability)
-        answer_text = facts
+    answer_text = "" if blocked else "".join(parts)
+
+    # 工具入参来自模型真实的调用，按工具名配对；失败的调用不在 results 里，不能按下标配对
+    for item in turn.results:
+        for slot in pending:
+            if slot["name"] == item.capability and not slot.get("used"):
+                item.arguments = slot["arguments"]
+                slot["used"] = True
+                break
+
+    yield ("answer", {"text": answer_text})
+    yield ("calls", turn.results)
 
     await chat_context_repo.save(
         ChatContext(
@@ -155,4 +257,3 @@ async def run(
             expires_at=float(ctx.expires_at or time.time() + 3600),
         )
     )
-    return answer_text, result

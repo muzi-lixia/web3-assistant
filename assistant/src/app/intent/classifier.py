@@ -3,7 +3,7 @@ import logging
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
-from pydantic import BaseModel, create_model
+from pydantic import create_model
 from langchain_ollama import ChatOllama
 from app.capabilities.registry import tools
 from app.core.config import settings
@@ -22,20 +22,24 @@ _SYSTEM = prompt(CLASSIFY_PROMPT).render(
 def _tool_names() -> tuple[str, ...]:
     return tuple(item.name for item in tools)
 
-def _output_model() -> type[BaseModel]:
-    """把当前已注册的能力名做成枚举，模型只能在白名单内取值。"""
-    names = _tool_names() + (NO_INTENT,)
-    return create_model("IntentOutput", capability=(Literal[names], ...))
+
+_NAMES = _tool_names()
+# 能力名在进程内不变，枚举模型只建一次
+_OUTPUT_MODEL = create_model(
+    "IntentOutput", capability=(Literal[_NAMES + (NO_INTENT,)], ...)
+)
 
 async def classify(text: str, history: str | None = None) -> Intent | None:
     """规则段没命中时调用。任何失败都返回 None，由调用方继续兜底。"""
 
-    names = _tool_names()
     llm = ChatOllama(
         model=settings.intent_model,
         base_url=settings.ollama_url,
         temperature=0,
-        async_client_kwargs={"trust_env": False},
+        async_client_kwargs={
+            "trust_env": False,
+            "timeout": settings.model_timeout_seconds,
+        },
     )
 
     messages: list[BaseMessage] = [SystemMessage(content=_SYSTEM)]
@@ -45,14 +49,14 @@ async def classify(text: str, history: str | None = None) -> Intent | None:
         messages.append(HumanMessage(content=f"用户这一轮问题是：{text}"))
 
     try:
-        structured = llm.with_structured_output(_output_model())
+        structured = llm.with_structured_output(_OUTPUT_MODEL)
         result = await structured.ainvoke(messages)
     except Exception:
         logger.warning("意图模型调用失败，跳过兜底段", exc_info=True)
         return None
     if result.capability == NO_INTENT:
         return None
-    if result.capability not in names:
+    if result.capability not in _NAMES:
         logger.warning("意图模型输出不在白名单：%r", result.capability)
         return None
     logger.info("意图由模型判定 intent=%s", result.capability)

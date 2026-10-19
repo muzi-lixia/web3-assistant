@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
 
-from app.api.deps import SessionContext, get_session
+from app.api.deps import SessionContext, get_session, enforce_nonce_rate_limit
 from app.core.config import settings
 from app.core.security import extract_nonce, SignatureError, recover_address, create_access_token, decode_access_token, TokenError
 from app.domain.addresses import to_display_address, AddressError
@@ -27,7 +27,10 @@ class NonceResponse(BaseModel):
     expires_in: int
 
 @router.post("/nonce")
-async def issue_nonce(payload: NonceRequest) -> NonceResponse:
+async def issue_nonce(
+    payload: NonceRequest,
+    _: None = Depends(enforce_nonce_rate_limit),
+) -> NonceResponse:
     """登录第一步：下发nonce与待签名消息"""
 
     try:

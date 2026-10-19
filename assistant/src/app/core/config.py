@@ -19,10 +19,13 @@ class Settings(BaseSettings):
     rpc_url: str = "https://rpc.berachain.com"
 
     chat_rate_limit_per_minute: int = 20
+    nonce_rate_limit_per_minute: int = 10
+    chat_message_max_chars: int = 100
     redis_url: str = "redis://localhost:6379/0"
 
     ollama_url: str = "http://localhost:11434"
     intent_model: str = "qwen2.5:7b"
+    model_timeout_seconds: int = 20
 
     etherscan_api_key: str = ""
 
