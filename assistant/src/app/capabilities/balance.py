@@ -1,22 +1,27 @@
 """资产余额能力。"""
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from app.capabilities.render import render_balance
 from app.capabilities.tool import capability
+from app.core.assets import SWBERA, WBERA
 from app.core.config import settings
+from app.core.errors import AppError
 from app.domain.money import from_raw
 from app.domain.provenance import Provenance
 from app.domain.results import CapabilityResult
 from app.domain.session import SessionContext
 from app.providers.pricing import PriceProvider
 from app.providers.rpc import BerachainRpc
-from app.core.assets import WBERA, SWBERA
 from app.repositories.token_scope import list_tokens
+
+logger = logging.getLogger(__name__)
 
 PRICE_CHAIN = "berachain"
 VALUE_QUANT = Decimal("0.0001")
 ONE_SHARE = 10**18
+
 
 def _usd(amount: Decimal, unit: Decimal | None) -> str | None:
     """没有单价就返回 None，不返回 0——两者业务含义不同。"""
@@ -40,22 +45,40 @@ async def _unit_prices(
     }
 
 
+def _valuation_note(units: dict[str, Decimal], missing: list[str]) -> str | None:
+    """估值口径：整轮无报价，或部分币种缺价。"""
+    if not units:
+        return "当前无法获取报价，合计未估值"
+    if missing:
+        return f"{'、'.join(missing)} 暂无报价，合计不含该项"
+    return None
+
+
 @capability(description="查询当前登录地址的资产余额", render=render_balance)
 async def asset_balance(ctx: SessionContext) -> CapabilityResult:
     rpc = BerachainRpc(settings.rpc_url)
-    block_height = await rpc.block_number()
+    tokens = await list_tokens(ctx.address)
+    block_height, native, token_raws = await rpc.balances_snapshot(
+        ctx.address, [token.address for token in tokens]
+    )
 
     holdings: list[tuple[str, Decimal, bool, str | None]] = [
-        ("BERA", await rpc.native_balance(ctx.address), True, None)
+        ("BERA", native, True, None)
     ]
-    for token in await list_tokens(ctx.address):
-        raw = await rpc.erc20_balance(token.address, ctx.address)
+    for token, raw in zip(tokens, token_raws):
         holdings.append(
             (token.symbol, from_raw(raw, token.decimals), False, token.address)
         )
-    prices = await PriceProvider().prices(
-        PRICE_CHAIN, [WBERA.address, SWBERA.address]
-    )
+
+    try:
+        prices = await PriceProvider().prices(
+            PRICE_CHAIN, [WBERA.address, SWBERA.address]
+        )
+    except AppError as exc:
+        # 报价是增值信息，取不到不该带走余额本身
+        logger.warning("报价不可用，本轮按未估值返回 code=%s detail=%s", exc.code, exc.detail)
+        prices = {}
+
     units = await _unit_prices(rpc, prices)
 
     items: list[dict] = []
@@ -81,6 +104,10 @@ async def asset_balance(ctx: SessionContext) -> CapabilityResult:
         )
 
     now = datetime.now(timezone.utc)
+    provenance = [Provenance(field="balances", source="berachain-rpc", at=now)]
+    if units:
+        provenance.append(Provenance(field="valuation", source="defillama", at=now))
+
     return CapabilityResult(
         capability="asset_balance",
         data={
@@ -88,12 +115,7 @@ async def asset_balance(ctx: SessionContext) -> CapabilityResult:
             "block_height": block_height,
             "items": items,
             "total_value_usd": str(total.quantize(VALUE_QUANT)),
-            "valuation_note": (
-                f"{'、'.join(missing)} 暂无报价，合计不含该项" if missing else None
-            ),
+            "valuation_note": _valuation_note(units, missing),
         },
-        provenance=[
-            Provenance(field="balances", source="berachain-rpc", at=now),
-            Provenance(field="valuation", source="defillama", at=now),
-        ],
+        provenance=provenance,
     )

@@ -33,7 +33,7 @@ class AddressRejected(AppError):
 
 class IntentUnrecognized(AppError):
     code = "intent_unrecognized"
-    message = "我可以帮你查询资产余额、质押情况。你可以换个问法试试。"
+    message = "我可以帮你查询资产余额、质押情况、交易记录。你可以换个问法试试。"
     retryable = False
 
 class FeatureUnavailable(AppError):

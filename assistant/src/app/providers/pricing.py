@@ -4,7 +4,8 @@ from decimal import Decimal
 
 import httpx
 
-from app.core.errors import DatasourceTimeout, DatasourceUnavailable
+from app.core.errors import DatasourceTimeout, DatasourceUnavailable, RateLimited
+from app.providers.http import client
 
 _BASE_URL = "https://coins.llama.fi/prices/current/"
 
@@ -17,14 +18,22 @@ class PriceProvider:
         """返回 {小写地址: 单价}。查不到的不出现在结果里，由上层标注不可用。"""
         keys = ",".join(f"{chain}:{address.lower()}" for address in addresses)
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.get(_BASE_URL + keys)
-                response.raise_for_status()
-                body = response.json()
+            response = await client().get(_BASE_URL + keys, timeout=self._timeout)
         except httpx.TimeoutException as exc:
             raise DatasourceTimeout(str(exc)) from exc
         except httpx.HTTPError as exc:
             raise DatasourceUnavailable(str(exc)) from exc
+
+        if response.status_code == 429:
+            raise RateLimited(f"HTTP 429 from {_BASE_URL}")
+
+        if response.status_code >= 400:
+            raise DatasourceUnavailable(f"HTTP {response.status_code}")
+
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise DatasourceUnavailable("报价接口返回非 JSON") from exc
 
         coins = body.get("coins", {})
         result: dict[str, Decimal] = {}

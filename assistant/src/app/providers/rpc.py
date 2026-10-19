@@ -6,24 +6,7 @@ import httpx
 
 from app.core.errors import DatasourceTimeout, DatasourceUnavailable, RateLimited
 from app.domain.money import from_raw
-
-_client: httpx.AsyncClient | None = None
-
-def _http(timeout: float) -> httpx.AsyncClient:
-    """进程内复用一条连接池，避免每次请求重做 TCP + TLS握手"""
-
-    global _client
-    if _client is None:
-        # 本机 HTTP_PROXY 会把 RPC 请求也转给代理，每次多 0.27s
-        _client = httpx.AsyncClient(timeout=timeout, trust_env=False)
-    assert _client is not None
-    return _client
-
-async def close_client() -> None:
-    global _client
-    if _client is not None:
-        await _client.aclose()
-        _client = None
+from app.providers.http import client
 
 def _balance_of_data(owner: str) -> str:
     return "0x70a08231" + owner.lower().removeprefix("0x").rjust(64, "0")
@@ -71,7 +54,7 @@ class BerachainRpc:
 
     async def _post(self, payload: Any) -> Any:
         try:
-            response = await _http(self._timeout).post(self._url, json=payload)
+            response = await client().post(self._url, json=payload, timeout=self._timeout)
         except httpx.TimeoutException as exc:
             raise DatasourceTimeout(str(exc)) from exc
         except httpx.HTTPError as exc:
@@ -132,6 +115,27 @@ class BerachainRpc:
     async def native_balance(self, address: str) -> Decimal:
         raw = await self._call("eth_getBalance", [address, "latest"])
         return from_raw(int(raw, 16))
+
+    async def balances_snapshot(
+        self, owner: str, tokens: list[str]
+    ) -> tuple[int, Decimal, list[int]]:
+        """块高 + 原生余额 + 各代币余额，一次 batch 取回。代币余额是链上原始整数。"""
+
+        calls = [
+            ("eth_blockNumber", []),
+            ("eth_getBalance", [owner, "latest"]),
+        ]
+        calls += [
+            ("eth_call", [{"to": token, "data": _balance_of_data(owner)}, "latest"])
+            for token in tokens
+        ]
+        block_number, native_raw, *token_raws = await self._batch(calls)
+
+        return (
+            int(block_number, 16),
+            from_raw(int(native_raw, 16)),
+            [int(_data(raw, token), 16) for raw, token in zip(token_raws, tokens)],
+        )
 
     async def convert_to_assets(self, vault: str, shares: int) -> int:
         """ERC-4626: 份额、对应资产数量（原始整数）"""

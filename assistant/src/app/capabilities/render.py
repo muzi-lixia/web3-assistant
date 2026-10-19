@@ -18,7 +18,8 @@ def render_balance(result: CapabilityResult) -> str:
         return f"当前地址没有持有资产 (区块高度 {data['block_height']})"
 
     text = "当前持有 " + "、".join(held)
-    text += f"，合计约 ${data['total_value_usd']}"
+    if any(item.get("value_usd") is not None for item in items):
+        text += f"，合计约 ${data['total_value_usd']}"
     if data.get("valuation_note"):
         text += f"（{data['valuation_note']}）"
     return text + f" (区块高度 {data['block_height']})"
