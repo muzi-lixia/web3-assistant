@@ -1,14 +1,26 @@
 import { authHeaders } from './api'
-import type { ChatErrorPayload, ProvenanceItem } from '../types/api'
+import type { CapabilityCall, ChatErrorPayload } from '../types/api'
 
 export type ChatStreamEvent =
   | { type: 'context'; conversationId: string }
-  | { type: 'intent'; stage: string }
+  | { type: 'intent'; capability: string; reason: string }
+  | { type: 'delta'; text: string }
   | { type: 'answer'; text: string }
-  | { type: 'data'; payload: unknown }
-  | { type: 'provenance'; items: ProvenanceItem[] }
+  | { type: 'data'; calls: CapabilityCall[] }
   | { type: 'error'; error: ChatErrorPayload }
   | { type: 'done' }
+
+function toCall(raw: unknown): CapabilityCall | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const value = raw as Partial<CapabilityCall>
+  if (typeof value.name !== 'string' || !value.name) return null
+  return {
+    name: value.name,
+    arguments: (value.arguments ?? {}) as Record<string, unknown>,
+    data: value.data,
+    provenance: Array.isArray(value.provenance) ? value.provenance : [],
+  }
+}
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -50,20 +62,26 @@ function parseFrame(frame: string): ChatStreamEvent | null {
         type: 'context',
         conversationId: String((data as { conversation_id?: string })?.conversation_id ?? ''),
       }
-    case 'intent':
+    case 'intent': {
+      const payload = data as { capability?: string; reason?: string }
       return {
         type: 'intent',
-        stage: String((data as { stage?: string })?.stage ?? 'recognized'),
+        capability: String(payload?.capability ?? ''),
+        reason: String(payload?.reason ?? ''),
       }
+    }
+    case 'delta':
+      return { type: 'delta', text: String((data as { text?: string })?.text ?? '') }
     case 'answer':
       return { type: 'answer', text: String((data as { text?: string })?.text ?? '') }
-    case 'data':
-      return { type: 'data', payload: (data as { payload?: unknown })?.payload }
-    case 'provenance':
+    case 'data': {
+      const calls = (data as { calls?: unknown })?.calls
+      if (!Array.isArray(calls)) return { type: 'data', calls: [] }
       return {
-        type: 'provenance',
-        items: ((data as { items?: ProvenanceItem[] })?.items ?? []) as ProvenanceItem[],
+        type: 'data',
+        calls: calls.map(toCall).filter((call): call is CapabilityCall => call !== null),
       }
+    }
     case 'error': {
       const payload = data as Partial<ChatErrorPayload>
       return {

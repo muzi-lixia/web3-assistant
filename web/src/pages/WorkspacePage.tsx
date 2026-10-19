@@ -1,20 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import { Drawer } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { ChatThread } from '../components/ChatThread'
 import { Composer } from '../components/Composer'
-import { TopBar } from '../components/TopBar'
+import { InfoDrawer, type InfoKind } from '../components/InfoDrawer'
+import { Sidebar, type NavKey } from '../components/Sidebar'
 import { TokenScopeDrawer } from '../components/TokenScopeDrawer'
+import { TopBar } from '../components/TopBar'
 import { useChat } from '../hooks/useChat'
 import { api } from '../lib/api'
-import { useSessionStore } from '../store/session'
-import { TX_DEPTH_DAYS, TX_FIXTURE } from '../fixtures/transactions'
+import { getToken, useSessionStore } from '../store/session'
+
+const SHORTCUTS: Partial<Record<NavKey, string>> = {
+  assets: '我钱包里现在有什么',
+  transactions: '最近都发生了什么',
+  staking: '我的质押什么时候能取出来',
+}
 
 export function WorkspacePage() {
   const session = useSessionStore((state) => state.session)
   const signOut = useSessionStore((state) => state.signOut)
-  const { messages, isStreaming, send, retry, stop, pushDemoMessage } = useChat()
+  const { messages, isStreaming, send, retry, stop } = useChat()
   const [scopeOpen, setScopeOpen] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
+  const [info, setInfo] = useState<InfoKind | null>(null)
   const [tokenCount, setTokenCount] = useState<number | null>(null)
 
   const scopeQuery = useQuery({
@@ -32,45 +41,67 @@ export function WorkspacePage() {
   const lastSource = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index]
-      if (message.role === 'assistant' && message.provenance?.length) {
-        return message.provenance[0]?.source
-      }
+      if (message.role !== 'assistant') continue
+      const call = message.calls?.find((item) => item.provenance.length > 0)
+      if (call) return call.provenance[0]?.source
     }
     return undefined
   }, [messages])
 
-  const insertTxDemo = useCallback(() => {
-    pushDemoMessage(
-      {
-        capability: 'transaction_records',
-        answer: { rangeDays: 30, depthDays: TX_DEPTH_DAYS, records: TX_FIXTURE },
-      },
-      '（示例）最近 30 天共 18 笔交易：普通 6 笔、内部 3 笔、ERC-20 转账 9 笔。数据源仅提供最近 90 天记录，更早的数据无法获取。',
-    )
-  }, [pushDemoMessage])
+  const handleNav = (key: NavKey) => {
+    setNavOpen(false)
+    if (key === 'scope') {
+      setScopeOpen(true)
+      return
+    }
+    if (key === 'sources' || key === 'help') {
+      setInfo(key)
+      return
+    }
+    const question = SHORTCUTS[key]
+    if (question) send(question)
+  }
+
+  const handleSignOut = () => {
+    const token = getToken()
+    signOut('manual')
+    // 本地会话已清，服务端撤销失败也不影响退出结果
+    if (token) void api.logout(token).catch(() => undefined)
+  }
 
   if (!session) return null
 
   return (
-    <div className="flex h-dvh flex-col bg-canvas">
-      <TopBar
-        address={session.address}
-        displayAddress={session.displayAddress}
-        tokenCount={tokenCount}
-        lastSource={lastSource}
-        onOpenScope={() => setScopeOpen(true)}
-        onSignOut={() => signOut('manual')}
-      />
+    <div className="flex h-dvh bg-canvas-soft">
+      <Sidebar active="agent" onSelect={handleNav} className="hidden lg:flex" />
 
-      <main className="flex min-h-0 flex-1 flex-col">
-        <ChatThread
-          messages={messages}
-          isStreaming={isStreaming}
-          onRetry={retry}
-          onPick={send}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar
+          address={session.address}
+          displayAddress={session.displayAddress}
+          tokenCount={tokenCount}
+          lastSource={lastSource}
+          onOpenScope={() => setScopeOpen(true)}
+          onOpenNav={() => setNavOpen(true)}
+          onSignOut={handleSignOut}
         />
-        <Composer onSend={send} onStop={stop} isStreaming={isStreaming} />
-      </main>
+
+        <main className="flex min-h-0 flex-1 flex-col">
+          <ChatThread messages={messages} isStreaming={isStreaming} onRetry={retry} onPick={send} />
+          <Composer onSend={send} onStop={stop} isStreaming={isStreaming} />
+        </main>
+      </div>
+
+      <Drawer
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
+        placement="left"
+        size={260}
+        closable={false}
+        styles={{ body: { padding: 0 } }}
+      >
+        <Sidebar active="agent" onSelect={handleNav} className="flex h-full w-full border-r-0" />
+      </Drawer>
 
       <TokenScopeDrawer
         open={scopeOpen}
@@ -78,13 +109,7 @@ export function WorkspacePage() {
         onCountChange={setTokenCount}
       />
 
-      {import.meta.env.DEV ? (
-        <div className="fixed bottom-3 left-3 z-30 hidden sm:block">
-          <Button size="small" onClick={insertTxDemo} className="!text-[11px] !text-ink-3">
-            示例：交易记录卡
-          </Button>
-        </div>
-      ) : null}
+      <InfoDrawer kind={info} onClose={() => setInfo(null)} />
     </div>
   )
 }

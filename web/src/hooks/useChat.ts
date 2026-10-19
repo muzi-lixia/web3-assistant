@@ -6,7 +6,7 @@ import type {
   ChatErrorPayload,
   ProvenanceItem,
 } from '../types/api'
-import { isAssetPayload, isStakingPayload } from '../types/api'
+import { toCapabilityPayload } from '../types/api'
 
 let counter = 0
 function nextId(prefix: string): string {
@@ -21,27 +21,31 @@ export interface UserMessage {
   at: number
 }
 
+export interface AssistantCall {
+  name: string
+  /** 模型实际传给工具的参数，用于「执行详情」 */
+  arguments: Record<string, unknown>
+  /** 形状与能力不符时为空，此时只出文本不出卡 */
+  payload?: CapabilityPayload
+  provenance: ProvenanceItem[]
+}
+
 export interface AssistantMessage {
   id: string
   role: 'assistant'
   status: 'streaming' | 'done' | 'error'
   at: number
-  intentStage?: string
+  capability?: string
+  intentReason?: string
   text?: string
-  payload?: CapabilityPayload
-  provenance?: ProvenanceItem[]
+  calls?: AssistantCall[]
+  /** 从发出提问到收到数据的时间，用于「执行详情」 */
+  elapsedMs?: number
   error?: ChatErrorPayload
   stopped?: boolean
-  demo?: boolean
 }
 
 export type ChatMessage = UserMessage | AssistantMessage
-
-function classify(payload: unknown): CapabilityPayload | undefined {
-  if (isAssetPayload(payload)) return { capability: 'asset_balance', answer: payload }
-  if (isStakingPayload(payload)) return { capability: 'staking_position', answer: payload }
-  return undefined
-}
 
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -59,10 +63,22 @@ export function useChat() {
     )
   }, [])
 
+  const update = useCallback(
+    (id: string, updater: (message: AssistantMessage) => AssistantMessage) => {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === id && message.role === 'assistant' ? updater(message) : message,
+        ),
+      )
+    },
+    [],
+  )
+
   const run = useCallback(
     async (text: string) => {
       const assistantId = nextId('assistant')
       const controller = new AbortController()
+      const startedAt = performance.now()
       controllerRef.current = controller
       setIsStreaming(true)
 
@@ -82,18 +98,30 @@ export function useChat() {
                 if (event.conversationId) conversationRef.current = event.conversationId
                 break
               case 'intent':
-                patch(assistantId, { intentStage: event.stage })
+                patch(assistantId, {
+                  capability: event.capability,
+                  intentReason: event.reason,
+                })
+                break
+              case 'delta':
+                update(assistantId, (message) => ({
+                  ...message,
+                  text: (message.text ?? '') + event.text,
+                }))
                 break
               case 'answer':
                 patch(assistantId, { text: event.text })
                 break
-              case 'data': {
-                const payload = classify(event.payload)
-                if (payload) patch(assistantId, { payload })
-                break
-              }
-              case 'provenance':
-                patch(assistantId, { provenance: event.items })
+              case 'data':
+                patch(assistantId, {
+                  elapsedMs: Math.round(performance.now() - startedAt),
+                  calls: event.calls.map((call) => ({
+                    name: call.name,
+                    arguments: call.arguments,
+                    payload: toCapabilityPayload(call.name, call.data),
+                    provenance: call.provenance,
+                  })),
+                })
                 break
               case 'error':
                 patch(assistantId, { status: 'error', error: event.error })
@@ -125,7 +153,7 @@ export function useChat() {
         setIsStreaming(false)
       }
     },
-    [patch],
+    [patch, update],
   )
 
   const send = useCallback(
@@ -149,21 +177,5 @@ export function useChat() {
     controllerRef.current?.abort()
   }, [])
 
-  const pushDemoMessage = useCallback((payload: CapabilityPayload, text: string) => {
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: nextId('assistant'),
-        role: 'assistant',
-        status: 'done',
-        at: Date.now(),
-        text,
-        payload,
-        provenance: [],
-        demo: true,
-      },
-    ])
-  }, [])
-
-  return { messages, isStreaming, send, retry, stop, pushDemoMessage }
+  return { messages, isStreaming, send, retry, stop }
 }

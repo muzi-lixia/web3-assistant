@@ -13,6 +13,11 @@ const COPY: Record<string, { title: string; hint: string; tone: 'warn' | 'danger
     hint: '当前可查询：资产余额 / 交易记录 / 质押情况。请明确想查哪一项。',
     tone: 'warn',
   },
+  feature_unavailable: {
+    title: '能力暂未接入',
+    hint: '意图已经识别出来，但对应能力还没有可用的数据源，本次不返回结果。',
+    tone: 'warn',
+  },
   datasource_unavailable: {
     title: '数据源故障',
     hint: '未返回任何数据，避免把「取不到」显示成「没有」。',

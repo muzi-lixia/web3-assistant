@@ -3,8 +3,6 @@ import { Input } from 'antd'
 import { ArrowUpOutlined } from '@ant-design/icons'
 import { cn } from '../lib/cn'
 
-const QUICK_PROMPTS = ['我钱包里现在有什么', '最近都发生了什么', '我的质押什么时候能取出来']
-
 export function Composer({
   onSend,
   onStop,
@@ -33,12 +31,12 @@ export function Composer({
   }
 
   return (
-    <div className="border-t border-line-soft bg-canvas">
-      <div className="mx-auto w-full max-w-[880px] px-4 py-3 sm:px-6">
+    <div className="border-t border-line-soft bg-canvas-soft">
+      <div className="mx-auto w-full max-w-[1120px] px-4 py-3.5 sm:px-8 xl:px-16">
         <div
           className={cn(
-            'flex items-end gap-2 rounded-[14px] border bg-[#0f0f0e] px-3 py-2 transition-colors',
-            isStreaming ? 'border-line' : 'border-line focus-within:border-gold/45',
+            'flex items-end gap-2 rounded-[14px] border bg-[#121110] py-1.5 pr-2 pl-3.5 transition-colors',
+            isStreaming ? 'border-line' : 'border-line/80 focus-within:border-gold/45',
           )}
         >
           <label htmlFor="composer" className="sr-only">
@@ -49,7 +47,7 @@ export function Composer({
             variant="borderless"
             autoSize={{ minRows: 1, maxRows: 5 }}
             value={value}
-            placeholder="问关于你的资产、交易或质押情况…"
+            placeholder="问我关于你的资产、交易或质押情况…"
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={handleKeyDown}
             onCompositionStart={() => {
@@ -58,7 +56,7 @@ export function Composer({
             onCompositionEnd={() => {
               composingRef.current = false
             }}
-            className="!px-1 !py-1.5 !text-[13.5px] !leading-relaxed"
+            className="!px-0 !py-2 !text-[13.5px] !leading-relaxed"
           />
 
           {isStreaming ? (
@@ -66,7 +64,7 @@ export function Composer({
               type="button"
               onClick={onStop}
               aria-label="停止本次查询"
-              className="mb-0.5 grid size-9 shrink-0 cursor-pointer place-items-center rounded-full border border-line bg-panel text-ink-2 transition-colors hover:border-danger/50 hover:text-danger"
+              className="mb-0.5 grid size-8 shrink-0 cursor-pointer place-items-center rounded-full border border-line bg-panel text-ink-2 transition-colors hover:border-danger/50 hover:text-danger"
             >
               <span className="block size-2.5 rounded-[2px] bg-current" />
             </button>
@@ -77,7 +75,7 @@ export function Composer({
               disabled={!value.trim()}
               aria-label="发送"
               className={cn(
-                'mb-0.5 grid size-9 shrink-0 place-items-center rounded-full transition-all',
+                'mb-0.5 grid size-8 shrink-0 place-items-center rounded-full transition-all',
                 value.trim()
                   ? 'cursor-pointer bg-gold text-[#241c07] hover:bg-[#f0cf7a]'
                   : 'cursor-not-allowed border border-line bg-panel text-ink-4',
@@ -87,28 +85,6 @@ export function Composer({
             </button>
           )}
         </div>
-
-        <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          {QUICK_PROMPTS.map((prompt) => (
-            <button
-              key={prompt}
-              type="button"
-              onClick={() => {
-                if (isStreaming) return
-                setValue('')
-                onSend(prompt)
-              }}
-              disabled={isStreaming}
-              className="cursor-pointer border-b border-dashed border-line pb-0.5 text-[11.5px] text-ink-3 transition-colors hover:border-gold/50 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {prompt}
-            </button>
-          ))}
-        </div>
-
-        <p className="mt-2 text-[11px] leading-relaxed text-ink-4">
-          Enter 发送 · Shift+Enter 换行 · 所有答案均附数据源与统计时点，不可溯源的数据不输出
-        </p>
       </div>
     </div>
   )

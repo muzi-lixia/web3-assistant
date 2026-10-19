@@ -1,6 +1,7 @@
 const SOURCE_LABELS: Record<string, string> = {
   'berachain-rpc': '链上 RPC',
   defillama: 'DeFiLlama',
+  'etherscan-v2': 'Etherscan',
   'browser-api': 'Browser API',
   coingecko: 'CoinGecko',
 }

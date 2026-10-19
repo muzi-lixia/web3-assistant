@@ -11,19 +11,14 @@ const SAMPLE_PROMPTS = [
 
 function UserBubble({ text, at }: { text: string; at: number }) {
   return (
-    <div className="flex items-start gap-3">
-      <span className="mt-0.5 grid size-[22px] shrink-0 place-items-center rounded-[7px] border border-line bg-panel text-[10.5px] text-ink-3">
-        你
-      </span>
-      <div className="min-w-0">
-        <div className="mb-1 flex items-center gap-2 text-[11.5px]">
-          <span className="text-ink-3">你</span>
-          <span className="num text-ink-4">{formatClock(new Date(at).toISOString())}</span>
-        </div>
-        <p className="inline-block max-w-[62ch] rounded-[10px] rounded-tl-[3px] border border-line bg-[#14140f] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-ink">
-          {text}
-        </p>
+    <div className="flex flex-col items-end">
+      <div className="mb-1.5 flex items-center gap-2 text-[11px] text-ink-4">
+        <span>你</span>
+        <span className="num">{formatClock(new Date(at).toISOString())}</span>
       </div>
+      <p className="max-w-[62ch] rounded-[10px] border border-line/70 bg-[#211f1b] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-ink">
+        {text}
+      </p>
     </div>
   )
 }
@@ -59,15 +54,15 @@ export function ChatThread({
     <div
       ref={scrollerRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto overscroll-contain px-4 pt-6 pb-4 sm:px-6"
+      className="flex-1 overflow-y-auto overscroll-contain"
     >
-      <div className="mx-auto flex w-full max-w-[880px] flex-col gap-7">
+      <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-7 px-4 pt-6 pb-6 sm:px-8 xl:px-16">
         {messages.length === 0 ? (
           <div className="pt-6 sm:pt-14">
             <p className="text-[11px] tracking-[0.14em] text-ink-4 uppercase">v1 只读查询</p>
-            <h1 className="mt-3 max-w-[18ch] text-[26px] leading-[1.3] font-semibold tracking-tight text-ink sm:text-[34px]">
+            <h2 className="mt-3 max-w-[20ch] text-[26px] leading-[1.3] font-semibold tracking-tight text-ink sm:text-[34px]">
               用自然语言一步拿到你的链上资产、交易与质押
-            </h1>
+            </h2>
             <p className="mt-3 max-w-[56ch] text-[13px] leading-relaxed text-ink-3">
               签名登录后自动绑定当前钱包地址；每条答案都标明数据源、统计区块与时间。
               不需要知道合约地址，也不必看懂区块浏览器。

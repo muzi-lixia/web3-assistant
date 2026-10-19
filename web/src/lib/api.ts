@@ -38,6 +38,9 @@ async function request<T>(
   const headers = authHeaders()
   headers.set('Accept', 'application/json')
   if (init.body) headers.set('Content-Type', 'application/json')
+  if (init.headers) {
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value))
+  }
 
   const response = await fetch(`${BASE}${path}`, { ...init, headers })
 
@@ -82,6 +85,14 @@ export const api = {
     ),
 
   me: () => request<MeResponse>('/api/v1/auth/me'),
+
+  /** token 需显式传入：调用方通常已先清掉本地会话 */
+  logout: (token: string) =>
+    request<{ status: string }>(
+      '/api/v1/auth/logout',
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+      { anonymous: true },
+    ),
 
   readScope: () => request<ScopeResponse>('/api/v1/tokens'),
 

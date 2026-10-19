@@ -13,7 +13,7 @@ export function Panel({
   return (
     <section
       className={cn(
-        'overflow-hidden rounded-[14px] border border-line bg-[#0f0f0e] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]',
+        'overflow-hidden rounded-[14px] border border-line bg-[#121210] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]',
         className,
       )}
     >
@@ -34,15 +34,13 @@ export function PanelHeader({
   tags?: ReactNode
 }) {
   return (
-    <header className="flex flex-wrap items-start justify-between gap-4 border-b border-line-soft px-4 py-4 sm:px-5">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="text-[15px] font-semibold tracking-tight text-ink">{title}</h3>
-          {tags}
-        </div>
-        {subtitle ? <p className="mt-1 text-xs text-ink-3">{subtitle}</p> : null}
+    <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3 px-5 py-4">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h3 className="text-[17px] leading-tight font-semibold tracking-tight text-ink">{title}</h3>
+        {tags}
+        {subtitle ? <p className="text-[12px] text-ink-4">{subtitle}</p> : null}
       </div>
-      {aside ? <div className="ml-auto text-right">{aside}</div> : null}
+      {aside ? <div className="ml-auto shrink-0 text-right">{aside}</div> : null}
     </header>
   )
 }
@@ -76,10 +74,11 @@ export function ProvenanceStrip({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line-soft bg-[#0b0b0a] px-4 py-2 text-[11px] text-ink-3 sm:px-5">
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-1 border-y border-line-soft bg-[#0d0d0c] px-5 py-2.5 text-[11.5px] text-ink-3">
+      <span className="h-3 w-px shrink-0 bg-gold/60" aria-hidden />
       {cells.map((cell) => (
         <span key={cell.label} className="whitespace-nowrap">
-          <span className="text-ink-4">{cell.label}</span>{' '}
+          <span className="text-ink-4">{cell.label} </span>
           <span className={cn('text-ink-2', cell.mono && 'num')}>{cell.value}</span>
         </span>
       ))}
@@ -140,7 +139,7 @@ export function StatValue({
   return (
     <div
       className={cn(
-        'num text-[26px] leading-tight font-medium tracking-tight',
+        'num text-[26px] leading-[1.15] font-medium tracking-tight',
         muted ? 'text-ink-4' : 'text-ink',
       )}
     >
@@ -150,7 +149,5 @@ export function StatValue({
 }
 
 export function StatLabel({ children }: { children: ReactNode }) {
-  return (
-    <div className="text-[11px] tracking-wide text-ink-3 uppercase">{children}</div>
-  )
+  return <div className="text-[11px] tracking-wide text-ink-4">{children}</div>
 }
