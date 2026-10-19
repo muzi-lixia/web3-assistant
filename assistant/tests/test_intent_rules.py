@@ -35,5 +35,5 @@ def test_transaction_intent_recognized_but_unsupported():
     intent = match("我最近的交易记录")
     assert intent is not None
     assert intent.capability == "transaction_history"
-    assert intent.supported is False
+    assert intent.supported is True
 

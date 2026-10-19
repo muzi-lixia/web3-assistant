@@ -1,5 +1,6 @@
 """对话编排：越权预扫描、意图识别、能力执行、答案组装"""
 import time
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from app.capabilities.registry import registry
@@ -52,9 +53,26 @@ def _render_staking(result: CapabilityResult) -> str:
         text += "。解锁队列数据暂不可得"
     return text
 
+def _render_transactions(result: CapabilityResult) -> str:
+    answer = result.answer
+    items = answer["items"]
+    if not items:
+        return f"没有查到交易记录（查询范围：最近 {answer['limit']} 条）"
+
+    latest = items[0]
+    when = datetime.fromtimestamp(latest["timestamp"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+    direction = "转入" if latest["direction"] == "in" else "转出"
+    state = "成功" if latest["status"] == "ok" else "失败"
+    return (
+        f"查到 {len(items)} 条交易，最新一条 {when} UTC "
+        f"{direction} {latest['value']} BERA，{state}"
+    )
+
+
 _RENDERERS = {
     "asset_balance": _render_balance,
     "staking_position": _render_staking,
+    "transaction_history": _render_transactions,
 }
 
 def _render(result: CapabilityResult) -> str:

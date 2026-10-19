@@ -2,6 +2,7 @@
 from app.capabilities.balance import BalanceCapability
 from app.capabilities.base import Capability
 from app.capabilities.staking import StakingCapability
+from app.capabilities.transactions import TransactionHistoryCapability
 
 
 class CapabilityRegistry:
@@ -28,3 +29,4 @@ class CapabilityRegistry:
 registry = CapabilityRegistry()
 registry.registry(BalanceCapability())
 registry.registry(StakingCapability())
+registry.registry(TransactionHistoryCapability())

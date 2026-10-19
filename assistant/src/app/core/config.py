@@ -25,5 +25,7 @@ class Settings(BaseSettings):
     ollama_url: str = "http://127.0.0.1:11434"
     intent_model: str = "qwen2.5:7b"
 
+    etherscan_api_key: str = ""
+
 
 settings = Settings()
