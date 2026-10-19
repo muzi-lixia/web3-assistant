@@ -8,7 +8,7 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from app.core.config import settings
-from app.domain.normalization import is_validate_address, normalize_address
+from app.domain.addresses import is_validate_address, normalize_address
 
 
 class SignatureError(Exception):

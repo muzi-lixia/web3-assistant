@@ -1,9 +1,12 @@
 """Nonce 存储：一次性消耗，TTL 到期自动消失。"""
 from redis.asyncio import Redis
 
+from app.core.redis import redis
+
+NONCE_TTL_SECONDS = 300
 
 class NonceRepository:
-    def __init__(self, client: Redis, ttl_seconds: int = 300) -> None:
+    def __init__(self, client: Redis, ttl_seconds: int = NONCE_TTL_SECONDS) -> None:
         self._client = client
         self._ttl = ttl_seconds
 
@@ -24,3 +27,5 @@ class NonceRepository:
             value, _ = await pipe.execute()
 
         return value
+
+nonce_repo = NonceRepository(redis)

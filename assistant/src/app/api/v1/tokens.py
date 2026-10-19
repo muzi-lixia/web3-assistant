@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_session
-from app.core.tokens import VERIFIED_TOKENS
+from app.core.assets import VERIFIED_TOKENS
 from app.domain.session import SessionContext
 from app.repositories.token_scope import list_tokens, token_scope_repo
 

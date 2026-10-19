@@ -1,41 +1,36 @@
-"""能力契约的三条红线：无地址入参、非法入参挡在定义期、无溯源不成立。"""
+"""能力契约的三条红线：模型看不到地址、地址入参在定义期被拒、无溯源不成立。"""
 
 from dataclasses import FrozenInstanceError
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
-from app.capabilities.balance import BalanceParams
-from app.capabilities.base import Capability
+from app.capabilities.registry import tools
+from app.capabilities.tool import capability
 from app.domain.results import CapabilityResult
 from app.domain.session import SessionContext
 
 
-def test_balance_params_has_no_address_field():
-    """资产查询的入参里不允许出现 address。"""
-    assert "address" not in BalanceParams.model_fields
+def test_no_tool_exposes_params_to_model():
+    """三个工具的参数表必须是空的，地址只能从会话里取。"""
+    for item in tools:
+        assert item.args == {}, item.name
 
 
 def test_capability_with_address_param_cannot_be_defined():
-    """定义了 address 入参的能力，在类创建那一刻就该失败。"""
-
-    class BadParams(BaseModel):
-        address: str
+    """定义了 address 入参的能力，在装饰那一刻就该失败。"""
 
     with pytest.raises(TypeError):
 
-        class BadCapability(Capability):
-            name = "bad"
-            input_model = BadParams
-
-            async def execute(self, ctx, params):
-                raise NotImplementedError
+        @capability(description="bad", render=lambda result: "")
+        async def bad_capability(address: str) -> CapabilityResult:
+            raise NotImplementedError
 
 
 def test_result_without_provenance_is_rejected():
     """没有溯源的结果无法构造，从类型层面拒绝无源答案。"""
     with pytest.raises(ValidationError):
-        CapabilityResult(capability="x", answer={}, provenance=[])
+        CapabilityResult(capability="x", data={}, provenance=[])
 
 
 def test_session_context_is_frozen():

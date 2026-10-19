@@ -4,24 +4,37 @@ import asyncio
 
 import pytest
 
-from app.capabilities.balance import BalanceParams
-from app.capabilities.base import Capability
 from app.core.errors import AddressRejected, IntentUnrecognized
 from app.domain.session import SessionContext
+from app.repositories.chat_context import ChatContextRepository
 from app.services import chat_service
 
 CTX = SessionContext(address="0xde709f2102306220921060314715629080e2fb77")
 OTHER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 
 
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    """编排层单测不碰 Redis、不碰模型。"""
+
+    async def no_context(self, conversation_id):
+        return None
+
+    async def no_model(text, history=None):
+        return None
+
+    monkeypatch.setattr(ChatContextRepository, "get", no_context)
+    monkeypatch.setattr(chat_service, "classify", no_model)
+
+
 def test_other_address_is_rejected_before_any_query():
     with pytest.raises(AddressRejected):
-        asyncio.run(chat_service.answer(CTX, f"查一下 {OTHER} 的资产", "conv-1"))
+        asyncio.run(chat_service.resolve(CTX, f"查一下 {OTHER} 的资产", "conv-1"))
 
 
 def test_unrecognized_question_raises():
     with pytest.raises(IntentUnrecognized):
-        asyncio.run(chat_service.answer(CTX, "今天天气怎么样", "conv-1"))
+        asyncio.run(chat_service.resolve(CTX, "今天天气怎么样", "conv-1"))
 
 
 def test_error_codes_are_stable():
@@ -29,19 +42,19 @@ def test_error_codes_are_stable():
     assert AddressRejected().code == "address_rejected"
     assert IntentUnrecognized().code == "intent_unrecognized"
 
-def test_followup_reuses_last_capability(monkeypatch):
-    """上一轮查了资产，这轮只说「还有呢」，应沿用资产能力。"""
-    from app.domain.results import CapabilityResult
-    from app.domain.provenance import Provenance
-    from datetime import datetime, timezone
 
-    class StubCapability(Capability):
-        name = "stub"
-        input_model = BalanceParams
+def test_rule_hit_needs_no_model():
+    """规则段命中就不该再叫模型。"""
+    intent = asyncio.run(chat_service.resolve(CTX, "我的质押资产有多少", "conv-1"))
+    assert intent.capability == "staking_position"
+    assert intent.supported is True
 
-        async def execute(self, ctx, params):
-            return CapabilityResult(
-                capability="stub",
-                answer={"block_height": 1, "items": [], "total_value_usd": "0", "valuation_note": None},
-                provenance=[Provenance(field="x", source="stub", at=datetime.now(timezone.utc))],
-            )
+
+def test_capability_names_match_registered_tools():
+    """意图里的能力名必须能在工具表里找到，否则兜底执行会 KeyError。"""
+    assert set(chat_service._TOOLS) == {
+        "asset_balance",
+        "staking_position",
+        "transaction_history",
+    }
+    assert set(chat_service._TOOLS) == set(chat_service._RENDERERS)

@@ -8,14 +8,10 @@ from pydantic import BaseModel
 
 from app.api.deps import SessionContext, get_session
 from app.core.config import settings
-from app.core.redis import redis
 from app.core.security import extract_nonce, SignatureError, recover_address, create_access_token, decode_access_token, TokenError
-from app.domain.normalization import to_display_address, AddressError
+from app.domain.addresses import to_display_address, AddressError
 from app.repositories.revocation import revocation_list
-from app.repositories.nonce_repo import NonceRepository
-
-nonce_repo = NonceRepository(redis)
-NONCE_TTL_SECONDS = 300
+from app.repositories.nonce import nonce_repo, NONCE_TTL_SECONDS
 
 router = APIRouter(
     prefix="/api/v1/auth",

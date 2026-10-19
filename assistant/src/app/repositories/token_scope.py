@@ -2,8 +2,8 @@
 import json
 
 from app.core.redis import redis
-from app.core.tokens import VERIFIED_TOKENS, Token
-from app.domain.normalization import normalize_address
+from app.core.assets import VERIFIED_TOKENS, Token
+from app.domain.addresses import normalize_address
 
 _DEFAULT: frozenset[str] = frozenset(token.address.lower() for token in VERIFIED_TOKENS)
 

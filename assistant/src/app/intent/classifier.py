@@ -5,9 +5,9 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
 from pydantic import BaseModel, create_model
 from langchain_ollama import ChatOllama
-from app.capabilities.registry import registry
+from app.capabilities.registry import tools
 from app.core.config import settings
-from app.intent.rules import Intent
+from app.intent.schema import Intent
 
 logger = logging.getLogger(__name__)
 
@@ -19,18 +19,21 @@ _SYSTEM = """你是意图分类器。判断用户问题属于下列哪个意图�
 
 def _capability_lines() -> str:
     return "\n".join(
-        f"- {item.name}: {item.description}" for item in registry.all()
+        f"- {item.name}: {item.description}" for item in tools
     )
+
+def _tool_names() -> tuple[str, ...]:
+    return tuple(item.name for item in tools)
 
 def _output_model() -> type[BaseModel]:
     """把当前已注册的能力名做成枚举，模型只能在白名单内取值。"""
-    names = tuple(registry.names()) + (NO_INTENT,)
+    names = _tool_names() + (NO_INTENT,)
     return create_model("IntentOutput", capability=(Literal[names], ...))
 
 async def classify(text: str, history: str | None = None) -> Intent | None:
     """规则段没命中时调用。任何失败都返回 None，由调用方继续兜底。"""
 
-    names = registry.names()
+    names = _tool_names()
     llm = ChatOllama(
         model=settings.intent_model,
         base_url=settings.ollama_url,

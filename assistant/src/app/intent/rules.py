@@ -1,13 +1,6 @@
 """意图规则：纯本地正则，不访问网络。未命中返回 None。"""
 import re
-
-from pydantic import BaseModel
-
-
-class Intent(BaseModel):
-    capability: str
-    reason: str
-    supported: bool = True
+from app.intent.schema import Intent
 
 _ADDRESS_RE = re.compile(r"0x[a-fA-F0-9]{40}")
 _ANAPHORA_RE = re.compile(r"那|呢|它|这个|那个|还有|继续")

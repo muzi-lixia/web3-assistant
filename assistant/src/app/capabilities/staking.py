@@ -1,59 +1,77 @@
-"""质押情况：sWBERA 持仓折算。解锁队列暂不可得，不编造"""
+"""质押情况：sWBERA 持仓与解锁队列。数据全部来自链上，不编造"""
 from datetime import datetime, timezone
+from decimal import Decimal
 
-from pydantic import BaseModel
-
-from app.capabilities.base import Capability
+from app.capabilities.render import render_staking
+from app.capabilities.tool import capability
 from app.core.config import settings
-from app.core.tokens import SWBERA
+from app.core.assets import SWBERA
+from app.domain.money import from_raw
 from app.domain.provenance import Provenance
 from app.domain.results import CapabilityResult
 from app.domain.session import SessionContext
 from app.providers.rpc import BerachainRpc
-from app.domain.money import from_raw
 
-class StakingParams(BaseModel):
-    """质押查询不需要任何参数"""
+@capability(description="查询当前登录地址的质押情况", render=render_staking)
+async def staking_position(ctx: SessionContext) -> CapabilityResult:
+    rpc = BerachainRpc(settings.rpc_url)
+    block_height = await rpc.block_number()
+    now = await rpc.block_timestamp()
 
+    raw_shares = await rpc.erc20_balance(SWBERA.address, ctx.address)
+    raw_assets = 0 if raw_shares == 0 else await rpc.convert_to_assets(
+        SWBERA.address, raw_shares
+    )
 
-class StakingCapability(Capability):
-    name = "staking_position"
-    description = "查询当前登录地址的质押情况"
-    input_model = StakingParams
+    cooldown = await rpc.withdrawal_cooldown(SWBERA.address)
+    request_ids = await rpc.withdrawal_request_ids(SWBERA.address, ctx.address)
 
-    async def execute(self, ctx: SessionContext, params: StakingParams) -> CapabilityResult:
-        rpc = BerachainRpc(settings.rpc_url)
-        block_height = await rpc.block_number()
+    pending: list[dict] = []
+    for request_id in request_ids:
+        req = await rpc.withdrawal_request(SWBERA.address, request_id)
+        ready_at = req["request_time"] + cooldown
+        pending.append({
+            "request_id": request_id,
+            "assets": str(from_raw(req["assets"], SWBERA.decimals)),
+            "request_time": req["request_time"],
+            "ready_at": ready_at,
+            "ready": now >= ready_at,
+            "remaining_seconds": max(0, ready_at - now),
+        })
 
-        raw_shares = await rpc.erc20_balance(SWBERA.address, ctx.address)
-        if raw_shares == 0:
-            raw_assets = 0
-        else:
-            raw_assets = await rpc.convert_to_assets(SWBERA.address, raw_shares)
+    waiting = [item for item in pending if not item["ready"]]
+    claimable = [item for item in pending if item["ready"]]
 
-        return CapabilityResult(
-            capability=self.name,
-            answer={
-                "block_height": block_height,
-                "in_position": {
-                    "symbol": "sWBERA",
-                    "shares": str(from_raw(raw_shares, SWBERA.decimals)),
-                    "equivalent_wbera": str(from_raw(raw_assets, SWBERA.decimals)),
-                },
-                "unlocking": {
-                    "available": False,
-                    "reason": "解锁队列读取方法尚未确认，暂不返回",
-                },
-                "claimable": {
-                    "available": False,
-                    "reason": "依赖解锁队列，随其一起暂不可得",
-                },
+    return CapabilityResult(
+        capability="staking_position",
+        data={
+            "block_height": block_height,
+            "block_time": now,
+            "in_position": {
+                "symbol": "sWBERA",
+                "shares": str(from_raw(raw_shares, SWBERA.decimals)),
+                "equivalent_wbera": str(from_raw(raw_assets, SWBERA.decimals)),
             },
-            provenance=[
-                Provenance(
-                    field="staking.in_position",
-                    source="berachain-rpc",
-                    at=datetime.now(timezone.utc),
+            "unlocking": {
+                "available": True,
+                "items": waiting,
+                "total_assets": str(
+                    sum((Decimal(i["assets"]) for i in waiting), Decimal(0))
                 ),
-            ],
-        )
+            },
+            "claimable": {
+                "available": True,
+                "items": claimable,
+                "total_assets": str(
+                    sum((Decimal(i["assets"]) for i in claimable), Decimal(0))
+                ),
+            },
+        },
+        provenance=[
+            Provenance(
+                field="staking",
+                source="berachain-rpc",
+                at=datetime.now(timezone.utc),
+            ),
+        ],
+    )

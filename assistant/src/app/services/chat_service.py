@@ -1,85 +1,53 @@
-"""对话编排：越权预扫描、意图识别、能力执行、答案组装"""
+"""对话编排：越权预扫描、意图识别、Agent 执行、答案组装"""
+import logging
 import time
-from datetime import datetime, timezone
-from decimal import Decimal
 
-from app.capabilities.registry import registry
+from langchain_ollama import ChatOllama
+from langchain.agents import create_agent
+from app.capabilities.registry import tools
+from app.capabilities.render import render_balance, render_staking, render_transactions
+from app.capabilities.tool import TurnContext
+from app.core.config import settings
 from app.core.errors import AddressRejected, IntentUnrecognized, FeatureUnavailable
-from app.domain.normalization import same_address
+from app.domain.addresses import same_address
 from app.domain.results import CapabilityResult
 from app.domain.session import SessionContext
-from app.intent.model import classify
-from app.intent.rules import extract_addresses, match, match_followup, Intent, refers_to_previous
+from app.intent.classifier import classify
+from app.intent.rules import extract_addresses, match, match_followup, refers_to_previous
+from app.intent.schema import Intent
 from app.repositories.chat_context import ChatContext, chat_context_repo
 
+logger = logging.getLogger(__name__)
 
-class AddressRejectedError(Exception):
-    """提问中包含他人地址"""
-
-class IntentUnRecognizedError(Exception):
-    """意图未命中"""
-
-REJECTION_MESSAGE = "我只能查询你当前登录钱包的地址，无法查询其他地址。"
-FALLBACK_MESSAGE = "我可以帮你查询资产余额、交易记录和质押情况。你可以换个问法试试。"
-
-def _render_balance(result: CapabilityResult) -> str:
-    answer = result.answer
-    items = answer.get("items", [])
-    held = [
-        f"{item['amount']} {item['symbol']}"
-        for item in items
-        if Decimal(item['amount']) > 0
-    ]
-
-    if not held:
-        return f"当前地址没有持有资产 (区块高度 {answer['block_height']})"
-
-    text = "当前持有 " + "、".join(held)
-    text += f"，合计约 ${answer['total_value_usd']}"
-    if answer.get("valuation_note"):
-        text += f"（{answer['valuation_note']}）"
-    return text + f" (区块高度 {answer['block_height']})"
-
-
-def _render_staking(result: CapabilityResult) -> str:
-    answer = result.answer
-    position = answer['in_position']
-    text = (
-        f"在押 {position['shares']} sWBERA"
-        f", 约合 {position['equivalent_wbera']} sWBERA"
-        f"（区块高度 {answer['block_height']}）"
-    )
-    if not answer["unlocking"]["available"]:
-        text += "。解锁队列数据暂不可得"
-    return text
-
-def _render_transactions(result: CapabilityResult) -> str:
-    answer = result.answer
-    items = answer["items"]
-    if not items:
-        return f"没有查到交易记录（查询范围：最近 {answer['limit']} 条）"
-
-    latest = items[0]
-    when = datetime.fromtimestamp(latest["timestamp"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-    direction = "转入" if latest["direction"] == "in" else "转出"
-    state = "成功" if latest["status"] == "ok" else "失败"
-    return (
-        f"查到 {len(items)} 条交易，最新一条 {when} UTC "
-        f"{direction} {latest['value']} BERA，{state}"
-    )
-
+_TOOLS = {item.name: item for item in tools}
 
 _RENDERERS = {
-    "asset_balance": _render_balance,
-    "staking_position": _render_staking,
-    "transaction_history": _render_transactions,
+    "asset_balance": render_balance,
+    "staking_position": render_staking,
+    "transaction_history": render_transactions,
 }
+
+_AGENT_PROMPT = """你是 Berachain 链上资产助手，只能查询当前登录用户本人的地址。
+
+本轮意图已判定为 {capability}。请直接调用对应工具取数，不要追问地址，不要自己计算或编造任何数字。
+工具返回的文本就是最终事实。"""
+
+
+def _model() -> ChatOllama:
+    return ChatOllama(
+        model=settings.intent_model,
+        base_url=settings.ollama_url,
+        temperature=0,
+        async_client_kwargs={"trust_env": False},
+    )
+
 
 def _render(result: CapabilityResult) -> str:
     renderer = _RENDERERS.get(result.capability)
     if renderer is None:
         raise RuntimeError(f"能力 {result.capability} 没有对应渲染器")
     return renderer(result)
+
 
 async def resolve(ctx: SessionContext, text: str, conversation_id: str) -> Intent:
     """越权预扫描 → 意图判定。拿到意图就可以先告诉前端。"""
@@ -113,10 +81,34 @@ async def run(
     intent: Intent,
     conversation_id: str
 ) -> tuple[str, CapabilityResult]:
-    """意图已定，执行能力并返回渲染好的答案。"""
+    """意图已定，交给 Agent 调工具；答案取工具结果，不经模型复述。"""
 
-    capability = registry.get(intent.capability)
-    result = await capability.execute(ctx, capability.input_model())
+    turn = TurnContext(ctx=ctx)
+    agent = create_agent(
+        _model(),
+        tools,
+        system_prompt=_AGENT_PROMPT.format(capability=intent.capability),
+    )
+    await agent.ainvoke(
+        {"messages": [("user", text)]},
+        config={"configurable": {"turn": turn}, "recursion_limit": 8},
+    )
+
+    if not turn.results:
+        # 模型没调工具时按已判定的意图兜底，不让一次模型失手变成产品故障
+        tool_ = _TOOLS.get(intent.capability)
+        if tool_ is None:
+            raise FeatureUnavailable()
+        logger.warning("Agent 未调用工具，按意图兜底执行 capability=%s", intent.capability)
+        await tool_.ainvoke({}, config={"configurable": {"turn": turn}})
+
+    result = turn.results[-1]
+    if result.capability != intent.capability:
+        logger.warning(
+            "Agent 实际调用 %s，与意图判定 %s 不一致",
+            result.capability,
+            intent.capability,
+        )
 
     await chat_context_repo.save(
         ChatContext(
@@ -128,17 +120,3 @@ async def run(
         )
     )
     return _render(result), result
-
-
-async def answer(
-    ctx: SessionContext,
-    text: str,
-    conversation_id: str
-) -> tuple[str, CapabilityResult]:
-    """两步合一，测试和内部调用用这个。"""
-
-    intent = await resolve(ctx, text, conversation_id)
-    return await run(ctx, text, intent, conversation_id)
-
-
-

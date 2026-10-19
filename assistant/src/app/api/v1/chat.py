@@ -49,7 +49,7 @@ async def _stream(session: SessionContext, message: str, conversation_id: str) -
         return
     yield _event("intent", { "capability": intent.capability, "reason": intent.reason })
     try:
-        text, result = await chat_service.answer(session, message, conversation_id)
+        text, result = await chat_service.run(session, message, intent, conversation_id)
     except Exception:
         logger.exception("query status=crash address=%s", session.address)
         yield _event(
@@ -68,7 +68,7 @@ async def _stream(session: SessionContext, message: str, conversation_id: str) -
         (time.perf_counter() - started) * 1000,
     )
     yield _event("answer", {"text": text})
-    yield _event("data", {"payload": result.answer})
+    yield _event("data", {"payload": result.data})
     yield _event(
         "provenance",
         {"items": [item.model_dump(mode="json") for item in result.provenance]},
