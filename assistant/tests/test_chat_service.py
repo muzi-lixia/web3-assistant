@@ -15,9 +15,9 @@ OTHER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 
 @pytest.fixture(autouse=True)
 def _offline(monkeypatch):
-    """编排层单测不碰 Redis、不碰模型。"""
+    """编排层单测不碰数据库、不碰模型。"""
 
-    async def no_context(self, conversation_id):
+    async def no_context(self, conversation_id, owner):
         return None
 
     async def no_model(text, history=None):

@@ -1,57 +1,99 @@
-"""对话上下文：记住上一轮问的是什么能力。TTL 跟随令牌剩余寿命。"""
+"""对话上下文：消息落库，按会话归属隔离。"""
+
+from dataclasses import dataclass
+
+from app.core import db
+from app.core.errors import ConversationForbidden
 
 
-import logging
-import time
-from dataclasses import dataclass, asdict
-import json
-from redis.asyncio import Redis
-
-from app.core.redis import redis
-
-logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
+@dataclass
 class ChatContext:
     conversation_id: str
-    address: str
-    last_capability: str | None
+    owner: str
     last_question: str | None
-    expires_at: float
+    last_capability: str | None
 
 
 class ChatContextRepository:
-    def __init__(self, client: Redis) -> None:
-        self._client = client
+    async def get(self, conversation_id: str, owner: str) -> ChatContext | None:
+        """别人的会话当它不存在——归属条件在 SQL 里，不靠调用方自觉。"""
 
-    @staticmethod
-    def _key(conversation_id: str) -> str:
-        return f"ctx:{conversation_id}"
-
-    async def get(self, conversation_id: str) -> ChatContext | None:
-        raw = await self._client.get(self._key(conversation_id))
-        if raw is None:
+        row = await db.pool().fetchrow(
+            """
+            SELECT
+                (SELECT m.content
+                   FROM messages m
+                  WHERE m.conversation_id = c.id AND m.role = 'user'
+                  ORDER BY m.id DESC LIMIT 1) AS last_question,
+                (SELECT m.capability
+                   FROM messages m
+                  WHERE m.conversation_id = c.id AND m.role = 'assistant'
+                  ORDER BY m.id DESC LIMIT 1) AS last_capability
+              FROM conversations c
+             WHERE c.id = $1::uuid AND c.owner = $2
+            """,
+            conversation_id,
+            owner,
+        )
+        if row is None:
             return None
-        try:
-            data = json.loads(raw)
-            data.setdefault("last_question", None)
-            context = ChatContext(**data)
-        except (ValueError, TypeError):
-            # 结构对不上就当成没有上下文，不让一条坏数据变成 500
-            logger.warning("对话上下文无法解析，已丢弃 conversation_id=%s", conversation_id)
-            await self._client.delete(self._key(conversation_id))
-            return None
+        return ChatContext(
+            conversation_id=conversation_id,
+            owner=owner,
+            last_question=row["last_question"],
+            last_capability=row["last_capability"],
+        )
 
-        if context.expires_at <= time.time():
-            await self._client.delete(self._key(conversation_id))
-            return None
-        return context
+    async def append(
+        self,
+        conversation_id: str,
+        owner: str,
+        role: str,
+        text: str,
+        capability: str | None = None,
+        client_msg_id: str | None = None
+    ) -> bool:
+        """写一条消息。同一会话里重复的 client_msg_id 不重复落库，返回 False。"""
 
-    async def save(self, context: ChatContext) -> None:
-        ttl = int(context.expires_at - time.time())
-        if ttl <= 0:
-            return
-        await self._client.set(self._key(context.conversation_id), json.dumps(asdict(context)), ex=ttl)
+        async with db.pool().acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO conversations (id, owner) VALUES ($1::uuid, $2)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    conversation_id,
+                    owner,
+                )
+                inserted = await conn.fetchval(
+                    "SELECT owner FROM conversations WHERE id = $1::uuid",
+                    conversation_id,
+                )
+                if inserted != owner:
+                    raise ConversationForbidden()
+                inserted = await conn.fetchval(
+                    """
+                    INSERT INTO messages
+                        (conversation_id, role, content, capability, client_msg_id)
+                    VALUES ($1::uuid, $2, $3, $4, $5)
+                    ON CONFLICT (conversation_id, client_msg_id)
+                        WHERE client_msg_id IS NOT NULL
+                    DO NOTHING
+                    RETURNING id
+                    """,
+                    conversation_id,
+                    role,
+                    text,
+                    capability,
+                    client_msg_id,
+                )
+                if inserted is None:
+                    return False
+                await conn.execute(
+                    "UPDATE conversations SET updated_at = now() WHERE id = $1::uuid",
+                    conversation_id,
+                )
+                return True
 
-chat_context_repo = ChatContextRepository(redis)
+
+chat_context_repo = ChatContextRepository()

@@ -29,18 +29,18 @@ _OUTPUT_MODEL = create_model(
     "IntentOutput", capability=(Literal[_NAMES + (NO_INTENT,)], ...)
 )
 
+_LLM = ChatOllama(
+    model=settings.intent_model,
+    base_url=settings.ollama_url,
+    temperature=0,
+    async_client_kwargs={
+        "trust_env": False,
+        "timeout": settings.model_timeout_seconds,
+    },
+)
+
 async def classify(text: str, history: str | None = None) -> Intent | None:
     """规则段没命中时调用。任何失败都返回 None，由调用方继续兜底。"""
-
-    llm = ChatOllama(
-        model=settings.intent_model,
-        base_url=settings.ollama_url,
-        temperature=0,
-        async_client_kwargs={
-            "trust_env": False,
-            "timeout": settings.model_timeout_seconds,
-        },
-    )
 
     messages: list[BaseMessage] = [SystemMessage(content=_SYSTEM)]
     if history:
@@ -49,7 +49,7 @@ async def classify(text: str, history: str | None = None) -> Intent | None:
         messages.append(HumanMessage(content=f"用户这一轮问题是：{text}"))
 
     try:
-        structured = llm.with_structured_output(_OUTPUT_MODEL)
+        structured = _LLM.with_structured_output(_OUTPUT_MODEL)
         result = await structured.ainvoke(messages)
     except Exception:
         logger.warning("意图模型调用失败，跳过兜底段", exc_info=True)

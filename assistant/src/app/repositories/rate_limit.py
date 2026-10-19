@@ -1,53 +1,46 @@
-"""按 key 的固定窗口限流。Redis 侧用 Lua 保证计数与过期时间一起写入。"""
+"""按 key 的固定窗口限流。计数在进程内存里，前提是单进程部署。"""
 
+import asyncio
 import time
-from redis.asyncio import Redis
-from app.core.config import settings
-from app.core.redis import redis
 
-# 先 INCR 再按结果决定是否 EXPIRE，两步必须原子：分开调用时进程在中间退出会留下永不过期的 key
-_SCRIPT = """
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then
-    redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return count
-"""
+from app.core.config import settings
 
 
 class FixedWindowLimiter:
-    def __init__(
-        self, client: Redis, limit: int, window_seconds: int, name: str = "default"
-    ) -> None:
-        self._client = client
+    def __init__(self, limit: int, window_seconds: int, name: str = "default") -> None:
         self._limit = limit
         self._window = window_seconds
         self._name = name
-
-    def _key(self, key: str) -> str:
-        bucket = int(time.time()) // self._window
-        return f"rate:{self._name}:{key}:{bucket}"
+        self._counts: dict[str, list] = {}
+        self._lock = asyncio.Lock()
 
     async def hit(self, key: str) -> float | None:
         """放行返回None，拒绝返回需要等待的描述"""
 
-        name = self._key(key)
-        count = await self._client.eval(_SCRIPT, 1, name, self._window)
+        bucket = int(time.time()) // self._window
+        async with self._lock:
+            if len(self._counts) > 256:
+                for stale in [k for k, v in self._counts.items() if v[0] != bucket]:
+                    del self._counts[stale]
+            entry = self._counts.setdefault(key, [bucket, 0])
+            if entry[0] != bucket:
+                entry[0] = bucket
+                entry[1] = 0
+            entry[1] += 1
+            count = entry[1]
+
         if count <= self._limit:
             return None
-        ttl = await self._client.ttl(name)
-        return float(ttl) if ttl > 0 else float(self._window)
+        return float((bucket + 1) * self._window - time.time())
 
 
 chat_limiter = FixedWindowLimiter(
-    redis,
     limit=settings.chat_rate_limit_per_minute,
     window_seconds=60,
     name="chat",
 )
 
 nonce_limiter = FixedWindowLimiter(
-    redis,
     limit=settings.nonce_rate_limit_per_minute,
     window_seconds=60,
     name="nonce",

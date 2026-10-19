@@ -1,22 +1,30 @@
-"""吊销集：记录已登出的 jti，直到令牌自身过期。
-"""
+"""吊销集：记录已登出的 jti，直到令牌自身过期。"""
 
 import time
-from redis.asyncio import Redis
-from app.core.redis import redis
+
+from app.core import db
 
 
 class RevocationList:
-    def __init__(self, client: Redis) -> None:
-        self._client = client
-
     async def revoke(self, jti: str, expires_at: int) -> None:
-        ttl = expires_at - int(time.time())
-        if ttl > 0:
-            await self._client.setex(f"revoked:{jti}", ttl, "1")
+        if expires_at <= int(time.time()):
+            return
+        await db.pool().execute(
+            """
+            INSERT INTO revoked_tokens (jti, expires_at)
+            VALUES ($1, to_timestamp($2))
+            ON CONFLICT (jti) DO NOTHING
+            """,
+            jti,
+            expires_at,
+        )
 
     async def is_revoked(self, jti: str) -> bool:
-        return bool(await self._client.exists(f"revoked:{jti}"))
+        found = await db.pool().fetchval(
+            "SELECT 1 FROM revoked_tokens WHERE jti = $1 AND expires_at > now()",
+            jti,
+        )
+        return found is not None
 
 
-revocation_list = RevocationList(redis)
+revocation_list = RevocationList()

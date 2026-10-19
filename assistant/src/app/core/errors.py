@@ -42,3 +42,9 @@ class FeatureUnavailable(AppError):
     code = "feature_unavailable"
     message = "这个功能还在接入数据源，暂时无法提供。"
     retryable = False
+
+class ConversationForbidden(AppError):
+    code = "conversation_forbidden"
+    message = "无法访问该会话，请新建一个对话。"
+    retryable = False
+

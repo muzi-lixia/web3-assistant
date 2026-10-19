@@ -43,18 +43,15 @@ _TOLERANCE = Decimal("0.01")
 # 小于这个值的整数按条数、序号处理，不参与核对
 _COUNT_LIMIT = Decimal(100)
 
-
-def _model() -> ChatOllama:
-    return ChatOllama(
-        model=settings.intent_model,
-        base_url=settings.ollama_url,
-        temperature=0,
-        async_client_kwargs={
-            "trust_env": False,
-            "timeout": settings.model_timeout_seconds,
-        },
-    )
-
+_MODEL = ChatOllama(
+    model=settings.intent_model,
+    base_url=settings.ollama_url,
+    temperature=0,
+    async_client_kwargs={
+        "trust_env": False,
+        "timeout": settings.model_timeout_seconds,
+    },
+)
 
 def _render(result: CapabilityResult) -> str:
     renderer = _RENDERERS.get(result.capability)
@@ -116,10 +113,9 @@ async def resolve(ctx: SessionContext, text: str, conversation_id: str) -> Inten
         if not same_address(raw, ctx.address):
             raise AddressRejected()
 
-    previous = await chat_context_repo.get(conversation_id)
-    same_user = previous is not None and previous.address == ctx.address
-    last_capability = previous.last_capability if same_user else None
-    last_question = previous.last_question if same_user else None
+    previous = await chat_context_repo.get(conversation_id, ctx.address)
+    last_capability = previous.last_capability if previous else None
+    last_question = previous.last_question if previous else None
     intent = match(text)
     if intent is None:
         history = last_question if (last_question and refers_to_previous(text)) else None
@@ -139,6 +135,7 @@ async def run_stream(
     text: str,
     intent: Intent,
     conversation_id: str,
+    client_msg_id: str | None = None,
 ) -> AsyncIterator[tuple[str, Any]]:
     """意图已定，交给 Agent 调工具；答案边生成边下发，数字逐句校验。
 
@@ -148,9 +145,13 @@ async def run_stream(
       calls  本轮全部工具调用结果
     """
 
+    recorded = await chat_context_repo.append(conversation_id, ctx.address, "user", text, client_msg_id=client_msg_id)
+    if not recorded:
+        yield ("duplicate", {})
+        return
     turn = TurnContext(ctx=ctx)
     agent = create_agent(
-        _model(),
+        _MODEL,
         tools,
         system_prompt=prompt(AGENT_PROMPT).render(capability=intent.capability),
     )
@@ -248,12 +249,11 @@ async def run_stream(
     yield ("answer", {"text": answer_text})
     yield ("calls", turn.results)
 
-    await chat_context_repo.save(
-        ChatContext(
-            conversation_id=conversation_id,
-            last_question=text,
-            address=ctx.address,
-            last_capability=result.capability,
-            expires_at=float(ctx.expires_at or time.time() + 3600),
-        )
+    await chat_context_repo.append(
+        conversation_id,
+        ctx.address,
+        "assistant",
+        answer_text,
+        capability=result.capability,
     )
+

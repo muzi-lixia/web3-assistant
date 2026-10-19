@@ -4,7 +4,7 @@ import time
 from collections.abc import AsyncIterator
 
 import logging
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -28,7 +28,8 @@ _SSE_HEADERS = {
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=settings.chat_message_max_chars)
-    conversation_id: str | None = None
+    conversation_id: UUID | None = None
+    client_msg_id: UUID | None = None
 
 def _event(name: str, data: dict) -> str:
     return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -38,6 +39,7 @@ async def _stream(
     message: str,
     conversation_id: str,
     retry_after: float | None = None,
+    client_msg_id: str | None = None
 ) -> AsyncIterator[str]:
     yield _event("context", {"conversation_id": conversation_id})
     started = time.perf_counter()
@@ -79,7 +81,7 @@ async def _stream(
     calls: list[CapabilityResult] = []
     try:
         async for name, payload in chat_service.run_stream(
-            session, message, intent, conversation_id
+            session, message, intent, conversation_id, client_msg_id
         ):
             if name == "delta":
                 if first_delta_at is None:
@@ -87,6 +89,17 @@ async def _stream(
                 yield _event("delta", payload)
             elif name == "answer":
                 yield _event("answer", payload)
+            elif name == "duplicate":
+                logger.warning("query status=duplicate address=%s", session.address)
+                yield _event(
+                    "error",
+                    {
+                        "code": "duplicate_request",
+                        "message": "重复请求已忽略",
+                        "retryable": False,
+                    },
+                )
+                return
             elif name == "calls":
                 calls = payload
     except AppError as exc:
@@ -123,13 +136,15 @@ async def _stream(
             }
         )
         return
-
+    first_delta_ms = (
+        int((first_delta_at - started) * 1000) if first_delta_at is not None else -1
+    )
     logger.info(
         "query capability=%s address=%s status=ok ms=%d ttfb_ms=%d model=%s agent_prompt=%s",
         "+".join(item.capability for item in calls),
         session.address,
         (time.perf_counter() - started) * 1000,
-        ((first_delta_at or time.perf_counter()) - started) * 1000,
+        first_delta_ms,
         settings.intent_model,
         chat_service.AGENT_PROMPT,
     )
@@ -166,9 +181,9 @@ async def chat(
     session: SessionContext = Depends(get_session),
     retry_after: float | None = Depends(chat_rate_limit),
 ) -> StreamingResponse:
-    conversation_id = payload.conversation_id or uuid4().hex
+    conversation_id = str(payload.conversation_id or uuid4())
     return StreamingResponse(
-        _stream(session, payload.message, conversation_id, retry_after),
+        _stream(session, payload.message, conversation_id, retry_after, payload.client_msg_id),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
