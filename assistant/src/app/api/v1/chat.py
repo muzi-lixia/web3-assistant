@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.deps import get_session, enforce_chat_rate_limit
+from app.core.config import settings
 from app.core.errors import AppError
 from app.domain.session import SessionContext
 from app.services import chat_service
@@ -50,6 +51,17 @@ async def _stream(session: SessionContext, message: str, conversation_id: str) -
     yield _event("intent", { "capability": intent.capability, "reason": intent.reason })
     try:
         text, result = await chat_service.run(session, message, intent, conversation_id)
+    except AppError as exc:
+        logger.warning(
+            "query capability=%s address=%s status=error code=%s ms=%d detail=%s",
+            intent.capability,
+            session.address,
+            exc.code,
+            (time.perf_counter() - started) * 1000,
+            exc.detail,
+        )
+        yield _event("error", {"code": exc.code, "message": exc.message, "retryable": exc.retryable})
+        return
     except Exception:
         logger.exception("query status=crash address=%s", session.address)
         yield _event(
@@ -62,16 +74,28 @@ async def _stream(session: SessionContext, message: str, conversation_id: str) -
         )
         return
     logger.info(
-        "query capability=%s address=%s status=ok ms=%d",
+        "query capability=%s address=%s status=ok ms=%d model=%s agent_prompt=%s",
         result.capability,
         session.address,
         (time.perf_counter() - started) * 1000,
+        settings.intent_model,
+        chat_service.AGENT_PROMPT,
     )
     yield _event("answer", {"text": text})
     yield _event("data", {"payload": result.data})
     yield _event(
         "provenance",
         {"items": [item.model_dump(mode="json") for item in result.provenance]},
+    )
+    yield _event(
+        "trace",
+        {
+            "model": settings.intent_model,
+            "prompts": {
+                "classify": chat_service.CLASSIFY_PROMPT,
+                "agent": chat_service.AGENT_PROMPT,
+            },
+        },
     )
     yield _event("done", {})
 

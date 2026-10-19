@@ -8,19 +8,16 @@ from langchain_ollama import ChatOllama
 from app.capabilities.registry import tools
 from app.core.config import settings
 from app.intent.schema import Intent
+from app.prompts import prompt
 
 logger = logging.getLogger(__name__)
 
 NO_INTENT = "none"
 
-_SYSTEM = """你是意图分类器。判断用户问题属于下列哪个意图，都不属于就输出 none。
-
-{capabilities}"""
-
-def _capability_lines() -> str:
-    return "\n".join(
-        f"- {item.name}: {item.description}" for item in tools
-    )
+CLASSIFY_PROMPT = "classify_v1"
+_SYSTEM = prompt(CLASSIFY_PROMPT).render(
+    capabilities=[(item.name, item.description) for item in tools]
+)
 
 def _tool_names() -> tuple[str, ...]:
     return tuple(item.name for item in tools)
@@ -37,12 +34,13 @@ async def classify(text: str, history: str | None = None) -> Intent | None:
     llm = ChatOllama(
         model=settings.intent_model,
         base_url=settings.ollama_url,
-        temperature=0
+        temperature=0,
+        async_client_kwargs={"trust_env": False},
     )
 
-    messages: list[BaseMessage] = [SystemMessage(content=_SYSTEM.format(capabilities=_capability_lines()))]
+    messages: list[BaseMessage] = [SystemMessage(content=_SYSTEM)]
     if history:
-        messages.append(HumanMessage(content=f"上一轮用户问的是：{history}"))
+        messages.append(HumanMessage(content=f"上一轮用户问的是：{history}\n这一轮用户问的是：{text}"))
     else:
         messages.append(HumanMessage(content=f"用户这一轮问题是：{text}"))
 
