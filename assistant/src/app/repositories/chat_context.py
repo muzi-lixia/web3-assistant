@@ -12,6 +12,7 @@ class ChatContext:
     owner: str
     last_question: str | None
     last_capability: str | None
+    recent_questions: list[str]
 
 
 class ChatContextRepository:
@@ -28,7 +29,12 @@ class ChatContextRepository:
                 (SELECT m.capability
                    FROM messages m
                   WHERE m.conversation_id = c.id AND m.role = 'assistant'
-                  ORDER BY m.id DESC LIMIT 1) AS last_capability
+                  ORDER BY m.id DESC LIMIT 1) AS last_capability,
+                (SELECT array_agg(r.content ORDER BY r.id)
+                   FROM (SELECT m.id, m.content
+                           FROM messages m
+                          WHERE m.conversation_id = c.id AND m.role = 'user'
+                          ORDER BY m.id DESC LIMIT 3) r) AS recent_questions
               FROM conversations c
              WHERE c.id = $1::uuid AND c.owner = $2
             """,
@@ -42,6 +48,7 @@ class ChatContextRepository:
             owner=owner,
             last_question=row["last_question"],
             last_capability=row["last_capability"],
+            recent_questions=list(row["recent_questions"] or ()),
         )
 
     async def append(

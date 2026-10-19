@@ -14,6 +14,7 @@ from app.capabilities.render import render_balance, render_staking, render_trans
 from app.capabilities.tool import TurnContext
 from app.core.config import settings
 from app.core.errors import AddressRejected, IntentUnrecognized, FeatureUnavailable
+from app.core.logging import log_context, span
 from app.domain.addresses import same_address
 from app.domain.results import CapabilityResult
 from app.domain.session import SessionContext
@@ -113,21 +114,49 @@ async def resolve(ctx: SessionContext, text: str, conversation_id: str) -> Inten
         if not same_address(raw, ctx.address):
             raise AddressRejected()
 
-    previous = await chat_context_repo.get(conversation_id, ctx.address)
-    last_capability = previous.last_capability if previous else None
-    last_question = previous.last_question if previous else None
-    intent = match(text)
-    if intent is None:
-        history = last_question if (last_question and refers_to_previous(text)) else None
-        intent = await classify(text, history=history)
-        if intent is None and history:
-            intent = match_followup(text, last_capability)
+    with log_context(conversation_id=conversation_id), span(
+        "intent.resolved"
+    ) as outcome:
+        previous = await chat_context_repo.get(conversation_id, ctx.address)
+        last_capability = previous.last_capability if previous else None
+        last_question = previous.last_question if previous else None
+        source = "rule"
+        intent = match(text)
+        if intent is None:
+            history = (
+                last_question if (last_question and refers_to_previous(text)) else None
+            )
+            intent = await classify(text, history=history)
+            source = "model"
+            if intent is None and history:
+                intent = match_followup(text, last_capability)
+                source = "followup"
 
-    if intent is None:
-        raise IntentUnrecognized()
-    if not intent.supported:
-        raise FeatureUnavailable()
-    return intent
+        if intent is None:
+            raise IntentUnrecognized()
+        if not intent.supported:
+            raise FeatureUnavailable()
+        outcome["capability"] = intent.capability
+        outcome["source"] = source
+        return intent
+
+
+def _history_note(conversation: ChatContext | None) -> str:
+    """把最近几轮问句拼成一条前置说明。只放提问，不放助手回答。
+
+    助手的回答里全是当时的链上数值，送进模型就会被复述，而数字校验只认本轮
+    工具结果，复述旧余额会让整段答案被判成编造。指代消解只需要用户问过什么。
+    """
+    if conversation is None or not conversation.recent_questions:
+        return ""
+    lines = "\n".join(
+        f"{index}. {question}"
+        for index, question in enumerate(conversation.recent_questions, 1)
+    )
+    return (
+        "【历史提问，仅用于理解指代。其中提到的数据已过期，必须重新取数，"
+        "不可当作当前事实。】\n" + lines
+    )
 
 
 async def run_stream(
@@ -145,10 +174,13 @@ async def run_stream(
       calls  本轮全部工具调用结果
     """
 
+    # 历史要在本轮写入之前取，否则这个问句会把自己也算进历史
+    conversation = await chat_context_repo.get(conversation_id, ctx.address)
     recorded = await chat_context_repo.append(conversation_id, ctx.address, "user", text, client_msg_id=client_msg_id)
     if not recorded:
         yield ("duplicate", {})
         return
+    history = _history_note(conversation)
     turn = TurnContext(ctx=ctx)
     agent = create_agent(
         _MODEL,
@@ -164,8 +196,13 @@ async def run_stream(
     calls_seen: set[str] = set()
     pending: list[dict] = []
 
+    messages: list[tuple[str, str]] = []
+    if history:
+        messages.append(("user", history))
+    messages.append(("user", text))
+
     async for mode, chunk in agent.astream(
-        {"messages": [("user", text)]},
+        {"messages": messages},
         config={"configurable": {"turn": turn}, "recursion_limit": 8},
         stream_mode=["messages", "values"],
     ):
@@ -187,7 +224,8 @@ async def run_stream(
         if not turn.results:
             continue
         if len(turn.results) > rendered:
-            facts = "\n".join(_render(item) for item in turn.results)
+            # 历史问句里的数字是用户自己给的，复述它不算编造
+            facts = "\n".join([history, *(_render(item) for item in turn.results)])
             rendered = len(turn.results)
 
         buffer += _text_of(message)
@@ -197,9 +235,12 @@ async def run_stream(
             if number is not None:
                 blocked = True
                 logger.warning(
-                    "答案片段未通过数字校验 number=%r 本轮不再下发答案 segment=%r",
-                    number,
-                    segment,
+                    "turn.blocked",
+                    extra={
+                        "conversation_id": conversation_id,
+                        "capability": intent.capability,
+                        "stage": "number_check",
+                    },
                 )
                 break
             parts.append(segment)
@@ -215,9 +256,12 @@ async def run_stream(
         else:
             blocked = True
             logger.warning(
-                "答案尾段未通过数字校验 number=%r 本轮不再下发答案 tail=%r",
-                number,
-                buffer,
+                "turn.blocked",
+                extra={
+                    "conversation_id": conversation_id,
+                    "capability": intent.capability,
+                    "stage": "number_check_tail",
+                },
             )
 
     if not turn.results:
@@ -225,15 +269,24 @@ async def run_stream(
         tool_ = _TOOLS.get(intent.capability)
         if tool_ is None:
             raise FeatureUnavailable()
-        logger.warning("Agent 未调用工具，按意图兜底执行 capability=%s", intent.capability)
+        logger.warning(
+            "turn.fallback",
+            extra={
+                "conversation_id": conversation_id,
+                "capability": intent.capability,
+            },
+        )
         await tool_.ainvoke({}, config={"configurable": {"turn": turn}})
 
     result = turn.results[-1]
     if result.capability != intent.capability:
         logger.warning(
-            "Agent 实际调用 %s，与意图判定 %s 不一致",
-            result.capability,
-            intent.capability,
+            "intent.mismatch",
+            extra={
+                "conversation_id": conversation_id,
+                "capability": intent.capability,
+                "tool": result.capability,
+            },
         )
 
     answer_text = "" if blocked else "".join(parts)

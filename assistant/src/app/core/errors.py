@@ -47,4 +47,3 @@ class ConversationForbidden(AppError):
     code = "conversation_forbidden"
     message = "无法访问该会话，请新建一个对话。"
     retryable = False
-

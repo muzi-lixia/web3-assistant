@@ -8,6 +8,7 @@ from app.domain.results import CapabilityResult
 
 def render_balance(result: CapabilityResult) -> str:
     data = result.data
+    scope = data.get("symbol")
     items = data.get("items", [])
     held = [
         f"{item['amount']} {item['symbol']}"
@@ -15,11 +16,15 @@ def render_balance(result: CapabilityResult) -> str:
         if Decimal(item["amount"]) > 0
     ]
     if not held:
+        if scope:
+            # 点名了币种，零余额本身就是答案，不能说成「没有资产」
+            return f"当前地址 {scope} 余额为 0 (区块高度 {data['block_height']})"
         return f"当前地址没有持有资产 (区块高度 {data['block_height']})"
 
     text = "当前持有 " + "、".join(held)
     if any(item.get("value_usd") is not None for item in items):
-        text += f"，合计约 ${data['total_value_usd']}"
+        label = "约" if scope else "合计约"
+        text += f"，{label} ${data['total_value_usd']}"
     if data.get("valuation_note"):
         text += f"（{data['valuation_note']}）"
     return text + f" (区块高度 {data['block_height']})"

@@ -47,10 +47,13 @@ async def _stream(
     if retry_after is not None:
         exc = RateLimited()
         logger.warning(
-            "query capability=- address=%s status=error code=%s wait=%s",
-            session.address,
-            exc.code,
-            retry_after,
+            "chat.rate_limited",
+            extra={
+                "conversation_id": conversation_id,
+                "status": "rate_limited",
+                "error_code": exc.code,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
         )
         yield _event(
             "error",
@@ -67,11 +70,13 @@ async def _stream(
         intent = await chat_service.resolve(session, message, conversation_id)
     except AppError as exc:
         logger.warning(
-            "query capability=- address=%s status=error code=%s ms=%d detail=%s",
-            session.address,
-            exc.code,
-            (time.perf_counter() - started) * 1000,
-            exc.detail,
+            "chat.failed",
+            extra={
+                "conversation_id": conversation_id,
+                "stage": "resolve",
+                "error_code": exc.code,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
         )
         yield _event("error", {"code": exc.code, "message": exc.message, "retryable": exc.retryable})
         return
@@ -90,7 +95,9 @@ async def _stream(
             elif name == "answer":
                 yield _event("answer", payload)
             elif name == "duplicate":
-                logger.warning("query status=duplicate address=%s", session.address)
+                logger.warning(
+                    "chat.duplicate", extra={"conversation_id": conversation_id}
+                )
                 yield _event(
                     "error",
                     {
@@ -104,17 +111,26 @@ async def _stream(
                 calls = payload
     except AppError as exc:
         logger.warning(
-            "query capability=%s address=%s status=error code=%s ms=%d detail=%s",
-            intent.capability,
-            session.address,
-            exc.code,
-            (time.perf_counter() - started) * 1000,
-            exc.detail,
+            "chat.failed",
+            extra={
+                "conversation_id": conversation_id,
+                "capability": intent.capability,
+                "stage": "agent",
+                "error_code": exc.code,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
         )
         yield _event("error", {"code": exc.code, "message": exc.message, "retryable": exc.retryable})
         return
     except Exception:
-        logger.exception("query status=crash address=%s", session.address)
+        logger.exception(
+            "chat.failed",
+            extra={
+                "conversation_id": conversation_id,
+                "capability": intent.capability,
+                "stage": "agent",
+            },
+        )
         yield _event(
             "error",
             {
@@ -126,7 +142,13 @@ async def _stream(
         return
 
     if not calls:
-        logger.error("query status=empty address=%s capability=%s", session.address, intent.capability)
+        logger.error(
+            "chat.empty",
+            extra={
+                "conversation_id": conversation_id,
+                "capability": intent.capability,
+            },
+        )
         yield _event(
             "error",
             {
@@ -140,13 +162,16 @@ async def _stream(
         int((first_delta_at - started) * 1000) if first_delta_at is not None else -1
     )
     logger.info(
-        "query capability=%s address=%s status=ok ms=%d ttfb_ms=%d model=%s agent_prompt=%s",
-        "+".join(item.capability for item in calls),
-        session.address,
-        (time.perf_counter() - started) * 1000,
-        first_delta_ms,
-        settings.intent_model,
-        chat_service.AGENT_PROMPT,
+        "chat.turn",
+        extra={
+            "conversation_id": conversation_id,
+            "capability": "+".join(item.capability for item in calls),
+            "status": "ok",
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            "first_token_ms": first_delta_ms,
+            "result_count": len(calls),
+            "model": settings.intent_model,
+        },
     )
     yield _event(
         "data",

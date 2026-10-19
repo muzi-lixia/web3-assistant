@@ -37,3 +37,10 @@ def test_transaction_intent_recognized_but_unsupported():
     assert intent.capability == "transaction_history"
     assert intent.supported is True
 
+
+def test_naming_a_symbol_still_routes_to_balance():
+    """「我有多少 sWBERA」问的是持仓，不是质押，不能被质押规则抢走。"""
+    intent = match("我有多少 sWBERA")
+    assert intent is not None
+    assert intent.capability == "asset_balance"
+

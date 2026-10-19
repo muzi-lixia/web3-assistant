@@ -52,12 +52,16 @@ async def classify(text: str, history: str | None = None) -> Intent | None:
         structured = _LLM.with_structured_output(_OUTPUT_MODEL)
         result = await structured.ainvoke(messages)
     except Exception:
-        logger.warning("意图模型调用失败，跳过兜底段", exc_info=True)
+        logger.warning("intent.model_failed", exc_info=True)
         return None
     if result.capability == NO_INTENT:
         return None
     if result.capability not in _NAMES:
-        logger.warning("意图模型输出不在白名单：%r", result.capability)
+        logger.warning(
+            "intent.unexpected", extra={"capability": result.capability}
+        )
         return None
-    logger.info("意图由模型判定 intent=%s", result.capability)
+    logger.info(
+        "intent.model_result", extra={"capability": result.capability, "source": "model"}
+    )
     return Intent(capability=result.capability, reason="本地模型")
