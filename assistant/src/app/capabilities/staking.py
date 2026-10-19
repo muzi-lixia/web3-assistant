@@ -4,34 +4,27 @@ from decimal import Decimal
 
 from app.capabilities.render import render_staking
 from app.capabilities.tool import capability
-from app.core.config import settings
 from app.core.assets import SWBERA
+from app.core.config import settings
 from app.domain.money import from_raw
 from app.domain.provenance import Provenance
 from app.domain.results import CapabilityResult
 from app.domain.session import SessionContext
 from app.providers.rpc import BerachainRpc
 
+
 @capability(description="查询当前登录地址的质押情况", render=render_staking)
 async def staking_position(ctx: SessionContext) -> CapabilityResult:
-    rpc = BerachainRpc(settings.rpc_url)
-    block_height = await rpc.block_number()
-    now = await rpc.block_timestamp()
-
-    raw_shares = await rpc.erc20_balance(SWBERA.address, ctx.address)
-    raw_assets = 0 if raw_shares == 0 else await rpc.convert_to_assets(
-        SWBERA.address, raw_shares
+    snapshot = await BerachainRpc(settings.rpc_url).staking_snapshot(
+        SWBERA.address, ctx.address
     )
 
-    cooldown = await rpc.withdrawal_cooldown(SWBERA.address)
-    request_ids = await rpc.withdrawal_request_ids(SWBERA.address, ctx.address)
-
+    now = snapshot["block_time"]
     pending: list[dict] = []
-    for request_id in request_ids:
-        req = await rpc.withdrawal_request(SWBERA.address, request_id)
-        ready_at = req["request_time"] + cooldown
+    for req in snapshot["requests"]:
+        ready_at = req["request_time"] + snapshot["cooldown"]
         pending.append({
-            "request_id": request_id,
+            "request_id": req["request_id"],
             "assets": str(from_raw(req["assets"], SWBERA.decimals)),
             "request_time": req["request_time"],
             "ready_at": ready_at,
@@ -45,12 +38,12 @@ async def staking_position(ctx: SessionContext) -> CapabilityResult:
     return CapabilityResult(
         capability="staking_position",
         data={
-            "block_height": block_height,
+            "block_height": snapshot["block_number"],
             "block_time": now,
             "in_position": {
                 "symbol": "sWBERA",
-                "shares": str(from_raw(raw_shares, SWBERA.decimals)),
-                "equivalent_wbera": str(from_raw(raw_assets, SWBERA.decimals)),
+                "shares": str(from_raw(snapshot["shares"], SWBERA.decimals)),
+                "equivalent_wbera": str(from_raw(snapshot["assets"], SWBERA.decimals)),
             },
             "unlocking": {
                 "available": True,

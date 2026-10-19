@@ -32,6 +32,8 @@ def capability(description: str, render: Callable[[CapabilityResult], str]):
         async def run(config: Annotated[RunnableConfig, InjectedToolArg]) -> str:
             turn: TurnContext = config["configurable"]["turn"]
             result: CapabilityResult = await func(turn.ctx)
+            if result.capability != func.__name__:
+                raise RuntimeError(f"{func.__name__}返回的 capability 是 {result.capability}， 与工具能力 {func.__name__} 不一致")
             turn.results.append(result)
             return render(result)
 

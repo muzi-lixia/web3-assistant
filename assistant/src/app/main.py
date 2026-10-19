@@ -6,9 +6,15 @@ from app.api.v1.tokens import router as tokens_router
 from app.core.logging import setup_logging
 from fastapi.middleware.cors import CORSMiddleware
 
-setup_logging()
-app = FastAPI(title="Web3 智能助手")
+from app.providers.rpc import close_client
 
+setup_logging()
+
+async def lifespan(app: FastAPI):
+    yield
+    await close_client()
+
+app = FastAPI(title="Web3 智能助手", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(tokens_router)

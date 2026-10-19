@@ -82,7 +82,7 @@ async def asset_balance(ctx: SessionContext) -> CapabilityResult:
 
     now = datetime.now(timezone.utc)
     return CapabilityResult(
-        capability="assets_balance",
+        capability="asset_balance",
         data={
             "address": ctx.address,
             "block_height": block_height,
