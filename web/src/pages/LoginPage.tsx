@@ -32,7 +32,6 @@ export function LoginPage() {
     phase,
     error,
     nonceNotice,
-    walletAvailable,
     address,
     isConnected,
     connectedChainId,
@@ -170,14 +169,9 @@ export function LoginPage() {
               </div>
             ) : null}
 
-            {!walletAvailable ? (
-              <p className="mt-3 text-[11.5px] leading-relaxed text-ink-4">
-                未检测到浏览器钱包插件。安装 MetaMask 等 EVM 钱包后刷新本页即可。
-              </p>
-            ) : null}
-
             <p className="mt-4 text-[11px] leading-relaxed text-ink-4">
-              nonce 一次性有效（5 分钟）。验签失败或 nonce 失效时不会降级为匿名会话，需要重新发起登录。
+              支持浏览器插件钱包与 WalletConnect 扫码（手机钱包）。nonce 一次性有效（5 分钟），
+              验签失败或 nonce 失效时不会降级为匿名会话，需要重新发起登录。
             </p>
           </div>
 

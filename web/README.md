@@ -11,16 +11,20 @@ v1 只读查询版的前端实现，对应 `docs/PRD-v1-Berachain-Web3智能助�
 | 框架 | React 19 + TypeScript 7 |
 | 组件库 | antd 6（深色主题由 `ConfigProvider` 定制为原型的暖黑 + 金色） |
 | 样式 | Tailwind CSS 4（CSS-first `@theme` 定义设计 token） |
-| 钱包 | wagmi 3 + viem 2（`injected` 连接器，Berachain Mainnet 80094） |
+| 钱包 | Reown AppKit 1.8 + wagmi 3 + viem 2（WalletConnect 扫码 / 浏览器插件，Berachain Mainnet 80094） |
 | 数据 | TanStack Query 5（服务端状态）+ Zustand 5（登录态、对话列表） |
 
 ## 本地运行
 
 ```bash
 cd web
+cp .env.example .env  # 填 VITE_REOWN_PROJECT_ID（https://cloud.reown.com 免费创建）
 npm install
 npm run dev          # http://localhost:5173
 ```
+
+`VITE_REOWN_PROJECT_ID` 是钱包弹窗（AppKit / WalletConnect）的必需项，缺失时页面会直接报错，
+不会静默退化成只能用浏览器插件。
 
 开发服务器把 `/api` 代理到 `http://127.0.0.1:8000`（见 `vite.config.ts`），
 后端未启动时登录页仍可打开，接口请求会失败并给出提示。

@@ -1,7 +1,8 @@
 import { useCallback, useState } from 'react'
+import { useAppKit } from '@reown/appkit/react'
 import { useConnect, useConnection, useSignMessage, useSwitchChain } from 'wagmi'
 import { api, ApiError } from '../lib/api'
-import { berachain, hasInjectedWallet } from '../lib/wagmi'
+import { berachain } from '../lib/wagmi'
 import { useSessionStore } from '../store/session'
 
 export type LoginPhase =
@@ -34,7 +35,7 @@ function describeError(error: unknown): string {
 
 export function useLogin() {
   const { address, chainId, isConnected } = useConnection()
-  const { connectors, mutateAsync: connectAsync } = useConnect()
+  const { open } = useAppKit()
   const { mutateAsync: signMessageAsync } = useSignMessage()
   const { mutateAsync: switchChainAsync } = useSwitchChain()
   const signIn = useSessionStore((state) => state.signIn)
@@ -43,32 +44,13 @@ export function useLogin() {
   const [error, setError] = useState<string | null>(null)
   const [nonceNotice, setNonceNotice] = useState<string | null>(null)
 
-  const walletAvailable = hasInjectedWallet()
-
-  const connect = useCallback(async () => {
+  // 未连接时只负责把钱包弹窗打开：连上之后 isConnected 自然为真，按钮切成「签名登录」
+  const connect = useCallback(() => {
     setError(null)
-    if (!walletAvailable) {
-      setPhase('error')
-      setError('未检测到浏览器钱包插件。请安装 MetaMask 等 EVM 钱包后刷新页面。')
-      return
-    }
-
-    const connector = connectors[0]
-    if (!connector) {
-      setPhase('error')
-      setError('没有可用的钱包连接器。')
-      return
-    }
-
-    try {
-      setPhase('connecting')
-      await connectAsync({ connector })
-      setPhase('idle')
-    } catch (caught) {
-      setPhase('error')
-      setError(describeError(caught))
-    }
-  }, [connectAsync, connectors, walletAvailable])
+    setNonceNotice(null)
+    setPhase('idle')
+    open()
+  }, [open])
 
   const signInWithWallet = useCallback(async () => {
     if (!address) return
@@ -87,7 +69,7 @@ export function useLogin() {
       setPhase('awaiting-signature')
       let signature: string
       try {
-        signature = await signMessageAsync({ message: nonce.message })
+        signature = await signMessageAsync({ account: address, message: nonce.message })
       } catch (caught) {
         const code = (caught as { code?: number })?.code
         setPhase('error')
@@ -122,7 +104,6 @@ export function useLogin() {
     phase,
     error,
     nonceNotice,
-    walletAvailable,
     address,
     isConnected,
     connectedChainId: chainId,

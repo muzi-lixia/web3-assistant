@@ -4,9 +4,9 @@ import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WagmiProvider } from 'wagmi'
+import { wagmiConfig } from './lib/wagmi'
 import App from './App'
 import { antdTheme } from './theme'
-import { wagmiConfig } from './lib/wagmi'
 import './styles/global.css'
 
 const queryClient = new QueryClient({
