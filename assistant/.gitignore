@@ -1,0 +1,9 @@
+.venv
+.env
+__pycache__
+.coverage
+.coverage.*
+.cache
+.idea
+.vscode
+.DS_Store
